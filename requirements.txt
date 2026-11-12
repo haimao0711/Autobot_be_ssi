@@ -1,0 +1,28 @@
+APScheduler==3.10.4  # Temporary - will be replaced with Celery tasks
+Django==4.2.4
+django-cors-headers==4.3.1
+djangorestframework==3.14.0
+djangorestframework-simplejwt>=5.3.0
+setuptools>=65.0.0
+psycopg[binary]>=3.2.0
+python-dotenv==1.0.0
+requests==2.31.0
+beautifulsoup4==4.12.2
+pandas>=2.1.0
+numpy>=1.24.0
+ta==0.10.2
+django-db-connection-pool==1.2.4
+gunicorn==21.2.0
+websocket-client
+
+# Celery and Redis
+celery==5.4.0
+kombu==5.4.2
+amqp==5.2.0
+redis==6.1.0
+django-celery-beat==2.6.0
+django-celery-results==2.5.1
+flower==2.0.1
+
+# SSI FastConnect Trading SDK
+ssi-fctrading==2.5.3

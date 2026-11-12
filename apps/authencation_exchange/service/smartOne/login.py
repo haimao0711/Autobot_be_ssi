@@ -1,0 +1,638 @@
+from bs4 import BeautifulSoup
+import time
+import re
+import json
+import subprocess
+import requests
+import logging
+
+from apps.authencation_exchange.service.http_client import CustomHTTPClient
+from apps.authencation_exchange.service.enums import LoginStatusEnum
+from apps import api
+
+logger = logging.getLogger(__name__)
+def login_smart_one_vps_step_1(client, request_verification_token, account, password, cookie):
+    payload = {
+        "__RequestVerificationToken": request_verification_token,
+        "Step": 0,
+        "CountLoginFail": 0,
+        "AuthenType": None,
+        "SessionId": None,
+        "Account": account,
+        "Password": password,
+        "Timeout": 180,
+        "Captcha": "Blank"
+    }
+    
+    headers = {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Connection': 'keep-alive',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': f'DefaultAccount={account}; _fbp=fb.2.1704153092342.382624434; listStockId=34a41dc6e8eb4ed3836a157b35b388ff; listStockName=VNInDEX; listStock=BDG; _ga=GA1.1.1594567176.1700707680; _ga_EF90CDRSYZ=GS1.1.1711336414.2.1.1711336430.44.0.0; {cookie}; DefaultAccount={account}; startPs=06-07-2020; endPs=05-07-2020; _ga_4WDBKERLGC=GS1.1.1712061855.92.1.1712061896.0.0.0',
+        'Origin': 'https://smartone.vps.com.vn',
+        'Referer': 'https://smartone.vps.com.vn/Account/Login',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+    }
+        
+    data =  client.post_request_html("/vi-VN/Account/Login", payload=payload, headers=headers)
+        
+    return data
+
+# def login_smart_one_vps_step_1(request_verification_token, account, password, cookie):
+#     curl_command = f'''
+#         curl 'https://smartone.vps.com.vn/Account/Login' \
+#         -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+#         -H 'Accept-Language: vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' \
+#         -H 'Cache-Control: max-age=0' \
+#         -H 'Connection: keep-alive' \
+#         -H 'Content-Type: application/x-www-form-urlencoded' \
+#         -H 'Cookie: DefaultAccount={account}; _fbp=fb.2.1704153092342.382624434; listStockId=34a41dc6e8eb4ed3836a157b35b388ff; listStockName=VNInDEX; listStock=BDG; _ga=GA1.1.1594567176.1700707680; _ga_EF90CDRSYZ=GS1.1.1711336414.2.1.1711336430.44.0.0; {cookie}; DefaultAccount={account}; startPs=06-07-2020; endPs=05-07-2020; _ga_4WDBKERLGC=GS1.1.1712061855.92.1.1712062731.0.0.0' \
+#         -H 'Origin: https://smartone.vps.com.vn' \
+#         -H 'Referer: https://smartone.vps.com.vn/Account/Login' \
+#         -H 'Sec-Fetch-Dest: document' \
+#         -H 'Sec-Fetch-Mode: navigate' \
+#         -H 'Sec-Fetch-Site: same-origin' \
+#         -H 'Sec-Fetch-User: ?1' \
+#         -H 'Upgrade-Insecure-Requests: 1' \
+#         -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36' \
+#         -H 'sec-ch-ua: "Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"' \
+#         -H 'sec-ch-ua-mobile: ?0' \
+#         -H 'sec-ch-ua-platform: "macOS"' \
+#         --data-raw '__RequestVerificationToken={request_verification_token}&Step=0&CountLoginFail=0&AuthenType=&SessionId=&Account={account}&Password={password}&Timeout=180&Captcha=Blank'
+#   '''
+  
+#     # with open("curl_step_1.txt", "w") as w:
+#     #     w.write(curl_command)
+  
+#     try:
+#             # Run the command and capture the output
+#             output = subprocess.check_output(curl_command, shell=True)
+#             # Process the output as needed
+#             return output
+#     except subprocess.CalledProcessError as e:
+#             # Handle errors
+#             return ""
+
+# def login_get_session_vps_step_1(user_account, password):
+#     url = api.LOGIN_URL
+#     device_info = "eyJ0eXBlIjoid2ViIiwic291cmNlIjoiUHJpY2Vib2FyZCIsInZlcnNpb24iOiIxLjguMCIsIm1vZGVsIjoiQ2hyb21lIFdpbmRvd3MgMTAiLCJkZXZpY2VPUyI6IiIsImdlb0xvY2F0aW9uIjoiIn0="
+#     device_new = "wmcvbKOW8A0fwquH1Q3Tr/RDweFNIpEA4FMOwrgSJq746PKEffHRx1YJcFh8zzdvJfEiFImd2ieQFoYuQ6ESpHgKxTiKkVPxpBHy76k/OiycYeNbslY5TVEq7XmZ1JTDRpw56FtUtnxDgLu2tXBSxBIpneB4ZBYTamNvhF5c1FFfSFh7o8nyT/vAZP91E7lt2zIxTVlfxhRrMsmaRH7UxEHCA0fKfYsewK3woUUIYNZomVi1mAIPlw=="
+#     deviceName ="Chrome Windows 10"
+#     payload = {
+#         "user": user_account,
+#         "pass": password,
+#         "channel": "I",
+#         "language": "vi",
+#         "cmd": "Web.sCheckLogin",
+#         "p5": "",
+#         "p6": "",
+#         "p7": 1,
+#         "deviceNew": device_new.strip(),  # ensure no stray whitespace
+#         "deviceName": deviceName,
+#         "deviceInfo": device_info,
+#     }
+
+#     # ---- Handshake (core.vpbs) to obtain cookies/token if required ----
+#     # ---- Handshake (core.vpbs) to obtain cookies/token if required ----
+#     # ---- Handshake (core.vpbs) to obtain cookies/token if required ----
+#     handshake_headers = {
+#         "Content-Type": "application/json",
+#         "Accept": "application/json",
+#         "User-Agent": (
+#             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+#             "AppleWebKit/537.36 (KHTML, like Gecko) "
+#             "Chrome/124.0.0.0 Safari/537.36"
+#         ),
+#         "Referer": "https://bgapi.vps.com.vn/",
+#         "Origin": "https://bgapi.vps.com.vn",
+#     }
+#     try:
+#         handshake_res = requests.post(
+#             "https://bgapi.vps.com.vn/handler/core.vpbs",
+#             headers=handshake_headers,
+#             json={},
+#             timeout=10,
+#         )
+#         logger.debug(
+#             "Handshake status %s, body %s",
+#             handshake_res.status_code,
+#             handshake_res.text[:200],
+#         )
+#         # Only parse JSON if the response is JSON.
+#         if "application/json" in handshake_res.headers.get("Content-Type", ""):
+#             try:
+#                 handshake_json = handshake_res.json()
+#                 session_token = handshake_json.get("session")
+#             except Exception as e:
+#                 logger.warning("Handshake JSON parse failed: %s", e)
+#                 session_token = None
+#         else:
+#             logger.warning(
+#                 "Handshake returned non‑JSON content (Content‑Type: %s). Skipping token extraction.",
+#                 handshake_res.headers.get("Content-Type"),
+#             )
+#             session_token = None
+#     except Exception as e:
+#         logger.warning("Handshake request failed: %s", e)
+#         session_token = None
+
+#     # Build headers (including optional session token and handshake cookies)
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Accept": "application/json",
+#         "User-Agent": (
+#             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+#             "AppleWebKit/537.36 (KHTML, like Gecko) "
+#             "Chrome/124.0.0.0 Safari/537.36"
+#         ),
+#         "Referer": "https://bgapi.vps.com.vn/",
+#         "Origin": "https://bgapi.vps.com.vn",
+#     }
+#     if session_token:
+#         # Some VPS APIs accept the token via a custom header or cookie
+#         headers["X-Session-Id"] = session_token
+#         headers["Cookie"] = f"session={session_token}"
+#     else:
+#         # If handshake returned cookies, forward them
+#         if handshake_res.cookies:
+#             cookie_str = "; ".join([f"{k}={v}" for k, v in handshake_res.cookies.get_dict().items()])
+#             if cookie_str:
+#                 headers["Cookie"] = cookie_str
+#         # No session token and no cookies – proceed without additional auth
+
+
+
+#     # Duplicate header block removed – using the header built after handshake above
+
+#     logger.info("login_get_session_vps_step_1: start")
+#     logger.debug("Payload (full): %s", payload)
+#     response = requests.post(url, headers=headers, json=payload, timeout=15)
+#     logger.debug("Response status: %s, headers: %s", response.status_code, response.headers)
+
+#     # Validate response content
+#     if not response.text.strip():
+#         logger.error("Empty response from VPS step 1")
+#         raise ValueError("Empty response from VPS step 1")
+#     if "application/json" not in response.headers.get("Content-Type", ""):
+#         logger.warning(
+#             "Unexpected content type step 1: %s", response.headers.get("Content-Type")
+#         )
+#         # Log the full HTML response for debugging (may be large)
+#         logger.error("Full HTML response received (step 1):\n%s", response.text)
+#         return None
+#     # Parse JSON safely
+#     try:
+#         res_object = json.loads(response.text)
+#         logger.debug("Parsed JSON keys step 1: %s", list(res_object.keys()))
+#         logger.debug("API response rc: %s, rs: %s", res_object.get('rc'), res_object.get('rs'))
+#     except json.JSONDecodeError as e:
+#         logger.error("JSON decode error in step 1: %s", e)
+#         logger.debug("Full response body (first 500 chars): %s", response.text[:500])
+#         return None
+#     # Extract session_id safely – data may be a dict or a list
+#     data_obj = res_object.get("data")
+#     if isinstance(data_obj, list):
+#         if not data_obj:
+#             logger.error("API returned empty data list for login step 1")
+#             return None
+#         data_obj = data_obj[0]
+#     if not isinstance(data_obj, dict) or "sid" not in data_obj:
+#         logger.error("Unexpected data format in login response: %s", data_obj)
+#         return None
+#     session_id = data_obj["sid"]
+#     logger.info("login_get_session_vps_step_1: obtained session_id %s", session_id)
+#     return session_id
+
+# def login_get_session_vps_step_2(user_account, password, otp):
+#         url = api.LOGIN_URL
+#         payload = {
+#             "user": user_account,
+#             "pass": password,
+#             "channel": "I",
+#             "language": "vi",
+#             "cmd": "Web.sCheckLoginOTP",
+#             "p5": otp,
+#             "p6": '',
+#             "p7": 0,
+#             "deviceNew": "wmcvbKOW8A0fwquH1Q3Tr/RDweFNIpEA4FMOwrgSJq746PKEffHRx1YJcFh8zzdvJfEiFImd2ieQFoYuQ6ESpHgKxTiKkVPxpBHy76k/OiycYeNbslY5TVEq7XmZ1JTDRpw56FtUtnxDgLu2tXBSxBIpneB4ZBYTamNvhF5c1FFfSFh7o8nyT/vAZP91E7lt2zIxTVlfxhRrMsmaRH7UxEHCA0fKfYsewK3woUUIYNZomVi1mAIPlw==",
+#             "deviceName": "Chrome Windows 10",
+#             "deviceInfo": "eyJ0eXBlIjoid2ViIiwic291cmNlIjoiUHJpY2Vib2FyZCIsInZlcnNpb24iOiIxLjguMCIsIm1vZGVsIjoiQ2hyb21lIFdpbmRvd3MgMTAiLCJkZXZpY2VPUyI6IiIsImdlb0xvY2F0aW9uIjoiIn0="
+
+#         }
+
+#         headers = {
+#             'Content-Type': 'application/json'
+#         }
+
+#         logger.info('login_get_session_vps_step_2: start')
+#         logger.debug('Payload (masked): %s', {k: ('***' if k in ['pass', 'deviceNew', 'otp'] else v) for k, v in payload.items()})
+#         response = requests.request("POST", url, headers=headers, json=payload)
+#         logger.debug('Response status: %s, headers: %s', response.status_code, response.headers)
+#         # Validate response content
+#         if not response.text.strip():
+#             logger.error('Empty response from VPS step 2')
+#             raise ValueError('Empty response from VPS step 2')
+#         if 'application/json' not in response.headers.get('Content-Type', ''):
+#             logger.warning('Unexpected content type step 2: %s', response.headers.get('Content-Type'))
+#             return None
+#         # Parse JSON safely
+#         try:
+#             res_object = json.loads(response.text)
+#             logger.debug('Parsed JSON keys step 2: %s', list(res_object.keys()))
+#         except json.JSONDecodeError as e:
+#             logger.error('JSON decode error in step 2: %s', e)
+#             return None
+#         session_id = res_object['data']['sid']
+#         logger.info('login_get_session_vps_step_2: obtained session_id %s', session_id)
+#         return session_id
+
+
+
+VPS_LOGIN_URL = "https://bgapi.vps.com.vn/handler/core_check.login"
+
+# deviceNew phải là chuỗi Base64 hợp lệ (không có khoảng trắng)
+VPS_DEVICE_NEW = "0jeuKA1NqZWTbaWTC/bnSj4Gdn/VQS4C073C7N1gXsYjlOo2LGXeg5fQe09rJa3cRwKdU9VAgKoB5NCanUzOcyhcFt9VfCT5kTJ0NSQqZWy6i4BVrF0rAEz9w9HKmwpLHF2ahwV5apFfXCVHl8mbpMdyXqfD9fhwBrFcdf9bHqvQ/3FenY30eg5V9fcDoeGObQHgE2PnwH6Fvk8CGRlv3l1cKqMbzYSTe/MncCRCEqszrfEO6w=="
+VPS_DEVICE_INFO = "eyJ0eXBlIjoid2ViIiwic291cmNlIjoiUHJpY2Vib2FyZCIsInZlcnNpb24iOiIxLjguMCIsIm1vZGVsIjoiQ2hyb21lIFdpbmRvd3MgMTAiLCJkZXZpY2VPUyI6IiIsImdlb0xvY2F0aW9uIjoiIn0="
+
+# Header gọn, giống đúng lệnh curl đã test thành công trên server.
+VPS_LOGIN_HEADERS = {
+    "Content-Type": "application/json",
+    "Origin": "https://banggia.vps.com.vn",
+    "Referer": "https://banggia.vps.com.vn/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+}
+
+import os
+import tempfile
+
+
+class VpsBlockedError(Exception):
+    """VPS không trả JSON hợp lệ (vd. WAF chặn IP server hoặc không kết nối được)."""
+
+
+def _vps_raise_if_blocked(response, step_name):
+    """
+    Phân biệt "VPS chặn / không kết nối được" với "sai mật khẩu".
+    Sai mật khẩu vẫn trả JSON (rc != 1); trang HTML hoặc không có response là bị chặn.
+    """
+    if response is None:
+        raise VpsBlockedError(f"[{step_name}] Không kết nối được tới VPS")
+    content_type = response.headers.get("Content-Type", "").lower()
+    if response.status_code != 200 or "json" not in content_type:
+        raise VpsBlockedError(
+            f"[{step_name}] VPS trả về HTTP {response.status_code}, "
+            f"Content-Type={content_type or 'N/A'} (có thể WAF đang chặn IP server)"
+        )
+
+
+class _VpsResponse:
+    """Response tối giản, có cùng interface với requests.Response phần đang dùng."""
+
+    def __init__(self, status_code, headers, text):
+        self.status_code = status_code
+        self.headers = headers
+        self.text = text
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _vps_cookie_file(account_name):
+    # Đường dẫn cố định theo account để bước 1 và bước 2 dùng chung cookie,
+    # kể cả khi gunicorn xử lý 2 bước ở 2 worker khác nhau.
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(account_name))
+    return os.path.join(tempfile.gettempdir(), f"vps_login_{safe}.cookies")
+
+
+def _vps_curl_post(url, payload, cookie_file, step_name):
+    """
+    POST JSON bằng curl (cùng cách lệnh curl test thành công trên server).
+    Payload đi qua stdin để không lộ mật khẩu trên danh sách tiến trình.
+    """
+    cmd = ["curl", "-sS", "-v", "-X", "POST", url, "--max-time", "30", "-D", "-",
+           "-b", cookie_file, "-c", cookie_file, "-d", "@-"]
+    for key, value in VPS_LOGIN_HEADERS.items():
+        cmd += ["-H", f"{key}: {value}"]
+
+    proc = subprocess.run(
+        cmd,
+        input=json.dumps(payload).encode("utf-8"),
+        capture_output=True,
+        timeout=40,
+    )
+    raw = proc.stdout.decode("utf-8", "replace")
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace")
+        logger.error("[VPS %s] curl exit=%s", step_name, proc.returncode)
+        # -v cho biết lỗi xảy ra ở giai đoạn nào: DNS / TCP / TLS handshake / sau khi gửi request.
+        # Bỏ dòng Cookie để không ghi session vào log.
+        verbose = "\n".join(
+            line for line in stderr.splitlines() if not line.lower().startswith("> cookie")
+        )
+        logger.error("[VPS %s] curl verbose (đuôi):\n%s", step_name, verbose[-1500:])
+        # exit 56 sau khi đã nhận đủ response: server đóng TLS không báo trước.
+        # Vẫn dùng response đã nhận để log đúng nội dung (vd. trang chặn của WAF).
+        if not (proc.returncode == 56 and raw.startswith("HTTP/")):
+            return None
+        logger.warning("[VPS %s] Server đóng kết nối đột ngột sau khi trả response, "
+                       "vẫn xử lý response đã nhận", step_name)
+    # Có thể có nhiều khối header (100-continue, redirect): lấy khối cuối.
+    while raw.startswith("HTTP/") and "\r\n\r\n" in raw:
+        head, rest = raw.split("\r\n\r\n", 1)
+        if rest.startswith("HTTP/"):
+            raw = rest
+            continue
+        lines = head.split("\r\n")
+        status_code = int(lines[0].split()[1])
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                k, v = line.split(":", 1)
+                headers[k.strip()] = v.strip()
+        return _VpsResponse(status_code, headers, rest)
+
+    logger.error("[VPS %s] Không parse được response của curl", step_name)
+    return None
+
+
+def _vps_post(url, payload, step_name, cookie_file):
+    try:
+        logger.info("[VPS %s] POST %s", step_name, url)
+        response = _vps_curl_post(url, payload, cookie_file, step_name)
+        if response is not None:
+            logger.info("[VPS %s] HTTP=%s, Content-Type=%s", step_name,
+                        response.status_code, response.headers.get("Content-Type", ""))
+        return response
+    except FileNotFoundError:
+        logger.error("[VPS %s] Không tìm thấy lệnh curl trong container", step_name)
+    except subprocess.TimeoutExpired:
+        logger.error("[VPS %s] curl timeout", step_name)
+    except Exception:
+        logger.exception("[VPS %s] Lỗi không mong đợi khi gọi VPS", step_name)
+    return None
+
+
+def _vps_parse_response(response, step_name):
+    if response is None:
+        logger.error("[VPS %s] Không nhận được response", step_name)
+        return None
+
+    content_type = response.headers.get("Content-Type", "")
+
+    if response.status_code != 200:
+        logger.error("[VPS %s] HTTP error: %s", step_name, response.status_code)
+        return None
+
+    if "json" not in content_type.lower():
+        logger.error("[VPS %s] Response không phải JSON: %s", step_name, response.text[:500])
+        return None
+
+    try:
+        result = response.json()
+    except ValueError:
+        logger.exception("[VPS %s] Không thể parse JSON", step_name)
+        return None
+
+    logger.info("[VPS %s] cmd=%s, rc=%s", step_name, result.get("cmd"), result.get("rc"))
+    return result
+
+
+def _vps_build_payload(account_name, pass_login, cmd, p5, p7):
+    return {
+        "user": account_name,
+        "pass": pass_login,
+        "channel": "I",
+        "language": "vi",
+        "cmd": cmd,
+        "p5": p5,
+        "p6": "",
+        "p7": p7,
+        "deviceNew": VPS_DEVICE_NEW,
+        "deviceName": "Chrome Windows 10",
+        "deviceInfo": VPS_DEVICE_INFO,
+    }
+
+
+def login_get_session_vps_step_1(account_name, pass_login):
+    """
+    Bước 1: Kiểm tra tài khoản và mật khẩu.
+    Giữ nguyên cách gọi: login_get_session_vps_step_1(account_name, pass_login)
+    """
+    cookie_file = _vps_cookie_file(account_name)
+    if os.path.exists(cookie_file):
+        os.remove(cookie_file)
+
+    payload = _vps_build_payload(account_name, pass_login, "Web.sCheckLogin", "", "1")
+    response = _vps_post(VPS_LOGIN_URL, payload, "STEP 1", cookie_file)
+    _vps_raise_if_blocked(response, "STEP 1")
+    result = _vps_parse_response(response, "STEP 1")
+
+    if not result or result.get("rc") != 1:
+        if response is not None:
+            logger.error("[VPS STEP 1] Body: %s", response.text[:300])
+        return None
+
+    return result
+
+
+def login_get_session_vps_step_2(account_name, pass_login, otp):
+    """
+    Bước 2: Xác thực OTP.
+    Giữ nguyên cách gọi: login_get_session_vps_step_2(account_name, pass_login, otp)
+    """
+    cookie_file = _vps_cookie_file(account_name)
+    if not os.path.exists(cookie_file):
+        logger.warning("[VPS STEP 2] Không thấy cookie của bước 1, vẫn thử gửi OTP")
+
+    payload = _vps_build_payload(account_name, pass_login, "Web.sCheckLoginOTP", otp, "0")
+    response = _vps_post(VPS_LOGIN_URL, payload, "STEP 2", cookie_file)
+    _vps_raise_if_blocked(response, "STEP 2")
+    result = _vps_parse_response(response, "STEP 2")
+
+    if not result or result.get("rc") != 1:
+        if response is not None:
+            logger.error("[VPS STEP 2] Body: %s", response.text[:300])
+        return None
+
+    # Trả về sid để giữ nguyên cách sử dụng session_login_2 hiện tại.
+    data = result.get("data") or {}
+    session_id = data.get("sid") or data.get("key")
+
+    if os.path.exists(cookie_file):
+        os.remove(cookie_file)
+
+    return session_id
+
+
+
+
+def login_smart_one_vps_step_otp(client, request_verification_token, account, password, otp, session_id, cookie):
+    otp_payload = {
+            "__RequestVerificationToken": request_verification_token,
+            "Step": 1,
+            "CountLoginFail": 0,
+            "AuthenType": "M",
+            "SessionId": session_id,
+            "Account": account,
+            "Password": password,
+            "Timeout": 180,
+            "Captcha": "Blank",
+            "OTP": otp
+        }
+        
+    headers = {
+            'Content-Type': 'application/json',
+            'Cookie': cookie
+        }
+        
+    return client.post_request_html("/vi-VN/Account/Login", payload=otp_payload, headers=headers)
+
+def login_smart_one_vps_step_otp(request_verification_token, account, password, otp, session_id, cookie):
+    curl_command = f'''
+    curl 'https://smartone.vps.com.vn/Account/Login' \
+        -H 'Accept: application/json, text/javascript, */*; q=0.01' \
+        -H 'Accept-Language: vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' \
+        -H 'Connection: keep-alive' \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -H 'Cookie: DefaultAccount={account}; _fbp=fb.2.1704153092342.382624434; listStockId=34a41dc6e8eb4ed3836a157b35b388ff; listStockName=VNInDEX; listStock=BDG; _ga=GA1.1.1594567176.1700707680; _ga_EF90CDRSYZ=GS1.1.1711336414.2.1.1711336430.44.0.0; {cookie}; DefaultAccount={account}; startPs=06-07-2020; endPs=05-07-2020; _ga_4WDBKERLGC=GS1.1.1712494348.93.1.1712495618.0.0.0' \
+        -H 'Origin: https://smartone.vps.com.vn' \
+        -H 'Referer: https://smartone.vps.com.vn/vi-VN/Account/Login' \
+        -H 'Sec-Fetch-Dest: empty' \
+        -H 'Sec-Fetch-Mode: cors' \
+        -H 'Sec-Fetch-Site: same-origin' \
+        -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36' \
+        -H 'X-Requested-With: XMLHttpRequest' \
+        -H 'sec-ch-ua: "Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"' \
+        -H 'sec-ch-ua-mobile: ?0' \
+        -H 'sec-ch-ua-platform: "macOS"' \
+          --data-raw '__RequestVerificationToken={request_verification_token}&Step=1&CountLoginFail=0&AuthenType=M&SessionId={session_id}&Account={account}&Password={password}&Timeout=180&Captcha=Blank&OTP={otp}'
+    '''
+    # with open("curl_otp.txt", "w") as w:
+    #     w.write(curl_command)
+    
+    try:
+            # Run the command and capture the output
+            output = subprocess.check_output(curl_command, shell=True)
+            # Process the output as needed
+            return output
+    except subprocess.CalledProcessError as e:
+            # Handle errors
+            return ""
+
+def get_smart_one_vps_home_page(request_verification_token, account, session_id, cookie):
+    curl_command = f'''
+            curl 'https://smartone.vps.com.vn/' \
+                -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+                -H 'Accept-Language: vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' \
+                -H 'Connection: keep-alive' \
+                -H 'Cookie: DefaultAccount={account}; _fbp=fb.2.1704153092342.382624434; listStockId=34a41dc6e8eb4ed3836a157b35b388ff; listStockName=VNInDEX; listStock=BDG; _ga=GA1.1.1594567176.1700707680; _ga_EF90CDRSYZ=GS1.1.1711336414.2.1.1711336430.44.0.0; {cookie}; DefaultAccount={account}; startPs=06-07-2020; endPs=05-07-2020; _ga_4WDBKERLGC=GS1.1.1712061855.92.1.1712062731.0.0.0' \
+                -H 'Referer: https://smartone.vps.com.vn/Account/Login' \
+                -H 'Sec-Fetch-Dest: document' \
+                -H 'Sec-Fetch-Mode: navigate' \
+                -H 'Sec-Fetch-Site: same-origin' \
+                -H 'Sec-Fetch-User: ?1' \
+                -H 'Upgrade-Insecure-Requests: 1' \
+                -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36' \
+                -H 'sec-ch-ua: "Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"' \
+                -H 'sec-ch-ua-mobile: ?0' \
+                -H 'sec-ch-ua-platform: "macOS"'
+            '''
+            
+    # with open("curl_home_page.txt", "w") as w:
+    #     w.write(curl_command)
+            
+    try:
+        # Run the command and capture the output
+        output = subprocess.check_output(curl_command, shell=True)
+        # Process the output as needed
+        return output
+    except subprocess.CalledProcessError as e:
+        # Handle errors
+        return ""
+
+def extract_session_id_step_1(html):
+    # Parse the HTML string
+    if html == "":
+        return LoginStatusEnum.FAILED_PASSWORD , ""
+        
+    # Find the input tag with id "txtSessionId"
+    pattern = r'<input[^>]*?id="txtSessionId"[^>]*?/>'
+    matches = re.findall(pattern, str(html))
+    
+    if len(matches) >= 1:
+    # Extract the value from the second match
+        match_str = matches[0]
+        # Extract the value inside the Value attribute using another regular expression
+        value_pattern = r'Value="(.*?)"'
+        value_match = re.search(value_pattern, match_str)
+        if value_match:
+            # Extracted value
+            extracted_value = value_match.group(1)
+            return LoginStatusEnum.BY_PASS_PASSWORD , extracted_value
+    return LoginStatusEnum.FAILED_PASSWORD, ""
+
+def extract_session_id_step_2(html):
+    if html == "":
+        return LoginStatusEnum.FAILED_OTP, "" 
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Find the script tag containing the JSON-like object
+    script_tag = soup.find('script', string=re.compile('var global'))
+
+    if script_tag:
+        # Extract the content of the script tag
+        script_content = script_tag.string
+            # Extract the JSON-like object from the script content
+        match = re.search(r'var\s+global\s*=\s*({.*?})', script_content, re.DOTALL)        
+        if match:
+            json_string = match.group(1) + "\n}"
+            json_string = re.sub(r"([a-zA-Z0-9_]+)\s*:", r'"\1":', json_string)
+            json_string = '\n'.join([line for line in json_string.split('\n') if '"version":' not in line])
+            # Load the JSON string
+            global_dict = json.loads(json_string)
+            # Get the value of the "session" key
+            session_value = global_dict.get("session")
+            return LoginStatusEnum.BY_PASS_OTP , session_value
+        else:
+            return LoginStatusEnum.FAILED_OTP, ""
+    else:
+        return LoginStatusEnum.FAILED_OTP, ""
+    
+def login_smartone_vps(request_verification_token, account, password, otp, cookie):
+    # Make requests using the HTTP client
+    html_step_default = login_smart_one_vps_step_1(request_verification_token, account, password,cookie)
+    status_password_step,session_id = extract_session_id_step_1(html=html_step_default)
+    
+    if status_password_step == LoginStatusEnum.BY_PASS_PASSWORD:
+        time.sleep(2)
+        html_otp = login_smart_one_vps_step_otp(request_verification_token, account, password, otp, session_id, cookie)
+        otp_res_json = json.loads(html_otp)
+        success = otp_res_json.get("success")
+        message = otp_res_json.get("message")
+        
+        if success == False:
+            return LoginStatusEnum.FAILED_OTP, "", message
+        elif success == True:            
+            html_after_login = get_smart_one_vps_home_page(request_verification_token, account, session_id, cookie)
+            
+            parse_status, session = extract_session_id_step_2(html=html_after_login)
+            
+            if parse_status == LoginStatusEnum.FAILED_OTP:
+                return LoginStatusEnum.FAILED_OTP, "", ""
+            
+            return LoginStatusEnum.BY_PASS_OTP, session, ""
+    
+    else:
+        return LoginStatusEnum.FAILED_PASSWORD, "", ""

@@ -1,0 +1,176 @@
+services:
+  stock-predict-postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: ngominhnguyen@1985
+      POSTGRES_DB: stockdb
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U myuser -d stockdb" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend_net
+    logging: &logging
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    restart: always
+    environment:
+      DATABASES_HOST: stock-predict-postgres
+      DATABASES_PORT: 5432
+      DATABASES_USER: myuser
+      DATABASES_PASSWORD: ngominhnguyen@1985
+      DATABASES_DBNAME: stockdb
+      POOL_MODE: session
+      MAX_CLIENT_CONN: 2000
+      DEFAULT_POOL_SIZE: 1000
+      SERVER_RESET_QUERY: DISCARD ALL
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits
+      AUTH_TYPE: any
+    ports:
+      - "127.0.0.1:6432:6432"
+    depends_on:
+      stock-predict-postgres:
+        condition: service_healthy
+    networks:
+      - backend_net
+    logging: *logging
+
+  stock-predict-api:
+    build: .
+    environment:
+      PYTHONUNBUFFERED: 1
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: ngominhnguyen@1985
+      POSTGRES_DB: stockdb
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 6432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - pgbouncer
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Private key SSI FastConnect (đặt file ở ./secrets, không commit vào git)
+      - ./secrets:/app/secrets:ro
+    command: >
+      bash -c "sleep 30 &&
+               gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 1 --timeout 120"
+    networks:
+      - backend_net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - backend_net
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "redis-cli ping && redis-cli INFO replication | grep -q 'role:master'" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+  celery-worker:
+    build: .
+    restart: always
+    environment:
+      PYTHONUNBUFFERED: 1
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: ngominhnguyen@1985
+      POSTGRES_DB: stockdb
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 6432
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    command: [ "sh", "/app/celery-worker-entrypoint.sh" ]
+    volumes:
+      - .:/app
+    networks:
+      - backend_net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    deploy:
+      replicas: 2
+    logging: *logging
+
+  celery-beat:
+    build: .
+    restart: always
+    environment:
+      PYTHONUNBUFFERED: 1
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: ngominhnguyen@1985
+      POSTGRES_DB: stockdb
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 6432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/app
+    networks:
+      - backend_net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *logging
+
+  celery-flower:
+    build: .
+    environment:
+      PYTHONUNBUFFERED: 1
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    command: celery -A config flower --port=5555
+    ports:
+      - "127.0.0.1:5555:5555"
+    networks:
+      - backend_net
+    logging: *logging
+
+volumes:
+  postgres_data:
+  redis_data:
+
+
+networks:
+  backend_net:
+    external: true
+    name: autobotck_backend
