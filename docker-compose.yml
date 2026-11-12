@@ -166,8 +166,14 @@ services:
     logging: *logging
 
 volumes:
+  # Dùng lại volume dữ liệu của project cũ (thư mục AutoBotCk_Backend) để không mất DB/Redis.
+  # external: nếu volume không tồn tại, Compose báo lỗi thay vì tự tạo volume rỗng.
   postgres_data:
+    external: true
+    name: autobotck_backend_postgres_data
   redis_data:
+    external: true
+    name: autobotck_backend_redis_data
 
 
 networks:

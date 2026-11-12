@@ -28,9 +28,9 @@ Chú thích: ✅ đã xong · ⬜ chưa làm · 👤 bạn làm · 🤖 nhờ An
 | 2 | Whitelist IP VPS trên iBoard/FastConnect | 0.1 | 👤 | [ ] |
 | 3 | Đặt private key vào `secrets/` trên server, `chmod 600` | 0.2 | 👤 | [ ] |
 | 4 | Backup DB bằng `pg_dump` | 0.3 | 👤 | [ ] |
-| 5 | Backup code cũ và gắn thẻ image `vps-backup` | 0.4 | 👤 | [ ] |
-| 6 | Dừng giao dịch bot cũ, xác nhận không còn lệnh chờ | 1 | 👤 | [ ] |
-| 7 | Clone code mới, chép lại `.env*`, `redis.conf` | 2 | 👤 | [ ] |
+| 5 | Gắn thẻ image `vps-backup` để quay lại | 0.4 | 👤 | [ ] |
+| 6 | ✅ Đã `docker compose down` bản cũ (giữ volume). Còn lại: kiểm tra `docker volume ls` thấy 2 volume dữ liệu | 1 | 👤 | [ ] |
+| 7 | `git clone` vào `AutoBotCk_Backend_Ssi`, chép `.env*`, `redis.conf` | 2 | 👤 | [ ] |
 | 8 | Build image mới | 3 | 👤 | [ ] |
 | 9 | `sqlmigrate` rồi `migrate account` | 3 | 👤 | [ ] |
 | 10 | `UPDATE account` bật SSI cho 1 tài khoản thử | 4 | 👤 | [ ] |
@@ -46,59 +46,67 @@ Chú thích: ✅ đã xong · ⬜ chưa làm · 👤 bạn làm · 🤖 nhờ An
 ## 0. Chuẩn bị (làm trước, không ảnh hưởng bot đang chạy)
 
 1. **Whitelist IP:** vào iBoard/FastConnect đăng ký IP public của VPS (`curl ifconfig.me` trên server). Không có bước này SSI sẽ từ chối.
-2. **Private key:** tạo thư mục và đặt file khóa:
+2. **Private key:** tạo thư mục và đặt file khóa (trong thư mục dự án mới):
    ```bash
-   mkdir -p /var/www/AutoBotCk_Backend/secrets
+   mkdir -p /var/www/AutoBotCk_Backend_Ssi/secrets
    # chép file vào, ví dụ ssi_private.pem
-   chmod 600 /var/www/AutoBotCk_Backend/secrets/ssi_private.pem
-   echo "secrets/" >> .gitignore
+   chmod 600 /var/www/AutoBotCk_Backend_Ssi/secrets/ssi_private.pem
    ```
    Trong container đường dẫn là `/app/secrets/ssi_private.pem` → đây là giá trị cho cột `ssi_private_key_path`.
 3. **Backup DB:**
    ```bash
    docker exec autobotck_backend-stock-predict-postgres-1 pg_dump -U myuser stockdb > /root/stockdb_$(date +%F).sql
    ```
-4. **Backup code + gắn thẻ image cũ để quay lại:**
+4. **Gắn thẻ image cũ để quay lại** (thư mục cũ giữ nguyên, không cần copy):
    ```bash
-   cp -r /var/www/AutoBotCk_Backend /var/www/AutoBotCk_Backend_vps_backup
    for s in stock-predict-api celery-worker celery-beat celery-flower; do
      docker tag autobotck_backend-$s:latest autobotck_backend-$s:vps-backup
    done
    ```
 
-## 1. Dừng giao dịch trên bot cũ
+> [!IMPORTANT]
+> **Mô hình triển khai:** thư mục cũ `/var/www/AutoBotCk_Backend` (VPS) đã được `docker compose down` (xóa container, **giữ volume dữ liệu**). Toàn bộ stack (Postgres, pgbouncer, Redis, 4 service backend) giờ chạy từ `/var/www/AutoBotCk_Backend_Ssi` bằng `docker compose up -d`.
+> - `docker-compose.yml` mới khai báo volume `postgres_data`/`redis_data` là `external`, trỏ vào `autobotck_backend_postgres_data` và `autobotck_backend_redis_data` của project cũ. Nhờ đó DB và Redis giữ nguyên dữ liệu; nếu volume không tồn tại Compose sẽ báo lỗi chứ không tạo DB rỗng.
+> - **Tuyệt đối không** chạy `docker compose down -v` hay `docker volume rm` — sẽ mất dữ liệu.
 
-- Trên giao diện bot: tắt giao dịch (hệ thống tự hủy lệnh chờ và dừng scheduler).
-- Kiểm tra trên SmartOne không còn lệnh chờ khớp.
+## 1. Đã dừng bản cũ
 
-## 2. Cập nhật code (qua kho git riêng)
+Bạn đã chạy `docker compose down` ở thư mục cũ: 8 container (api, worker x2, beat, flower, redis, pgbouncer, postgres) đã bị xóa; nginx, certbot, frontend, sql_server vẫn chạy. Kiểm tra volume còn:
 
-Trên máy bạn, trước khi push:
-- `.gitignore` đã chặn `secrets/` và `*.pem`. Kiểm tra `git status` để chắc không có file khóa.
-- `docker-compose.yml` đang chứa mật khẩu Postgres và `.env.production` có `SECRET_KEY`: nếu kho git là private thì chấp nhận được, nên đổi sang biến môi trường khi có thời gian.
+```bash
+docker volume ls | grep autobotck_backend
+# cần thấy: autobotck_backend_postgres_data và autobotck_backend_redis_data
+docker network ls | grep autobotck_backend   # network ngoài, vẫn còn
+```
+
+## 2. Lấy code từ git về thư mục mới
+
+Trên máy bạn, trước khi push: kiểm tra `git status` để chắc không có file khóa (`.gitignore` đã chặn `secrets/` và `*.pem`). Kho git nên là **private** vì `docker-compose.yml` có mật khẩu Postgres và `.env.production` có `SECRET_KEY`.
 
 Trên server:
 ```bash
 cd /var/www
-mv AutoBotCk_Backend AutoBotCk_Backend_old   # giữ làm bản quay lại (đã backup ở bước 0)
-git clone <URL kho git riêng> AutoBotCk_Backend
-cd AutoBotCk_Backend
-# chép lại các file riêng của server từ bản cũ
-cp ../AutoBotCk_Backend_old/.env* . 2>/dev/null
-cp ../AutoBotCk_Backend_old/redis.conf . 2>/dev/null
+git clone <URL kho git riêng> AutoBotCk_Backend_Ssi
+cd AutoBotCk_Backend_Ssi
+cp ../AutoBotCk_Backend/.env* . 2>/dev/null
+cp ../AutoBotCk_Backend/redis.conf . 2>/dev/null
 mkdir -p secrets   # rồi đặt ssi_private.pem vào (bước 0)
+diff ../AutoBotCk_Backend/docker-compose.yml docker-compose.yml
 ```
-Dùng `diff` giữa `docker-compose.yml` cũ và mới trước khi `up`. Compose dùng network ngoài `autobotck_backend` và volume `postgres_data`/`redis_data` theo tên project, nên **phải giữ tên thư mục là `AutoBotCk_Backend`** để compose nhận đúng volume dữ liệu cũ.
 
 ## 3. Build và migrate
 
+Postgres và pgbouncer cần chạy trước khi migrate:
 ```bash
-cd /var/www/AutoBotCk_Backend
+cd /var/www/AutoBotCk_Backend_Ssi
+docker compose up -d stock-predict-postgres pgbouncer redis
+docker compose ps          # postgres, redis phải healthy
 docker compose build stock-predict-api celery-worker celery-beat celery-flower
 # Chỉ thêm 6 cột vào bảng account; tài khoản cũ mặc định broker='smartone'
 docker compose run --rm stock-predict-api python manage.py sqlmigrate account 0014
 docker compose run --rm stock-predict-api python manage.py migrate account
 ```
+Kiểm tra dữ liệu cũ còn: `docker compose exec stock-predict-postgres psql -U myuser stockdb -c "select count(*) from account;"` (số dòng phải khác 0).
 
 > [!NOTE]
 > Service `stock-predict-api` chạy `gunicorn` trực tiếp (không qua `entrypoint.sh`) nên **migrate không tự chạy**, phải chạy tay như trên.
@@ -112,10 +120,13 @@ WHERE account_num='<số TK SSI>';
 ```
 (Tên bảng thật xem `common/table_names.py`, mục `ACCOUNT`.)
 
-## 5. Khởi động lại
+## 5. Khởi động toàn bộ stack mới
 
 ```bash
-docker compose up -d stock-predict-api celery-worker celery-beat celery-flower
+cd /var/www/AutoBotCk_Backend_Ssi
+docker compose up -d
+docker compose ps
+docker exec nginx-proxy nginx -s reload     # để nginx nhận lại địa chỉ container api mới
 docker compose logs -f --tail=100 celery-worker
 ```
 
@@ -136,14 +147,15 @@ docker compose logs -f --tail=100 celery-worker
 ## Quay lại bản cũ (rollback)
 
 ```bash
+# 1) dừng stack SSI (không dùng -v)
+cd /var/www/AutoBotCk_Backend_Ssi
+docker compose down
+# 2) chạy lại stack VPS cũ từ thư mục cũ (image cũ vẫn còn, volume dữ liệu dùng chung)
 cd /var/www/AutoBotCk_Backend
-docker compose down stock-predict-api celery-worker celery-beat celery-flower
-for s in stock-predict-api celery-worker celery-beat celery-flower; do
-  docker tag autobotck_backend-$s:vps-backup autobotck_backend-$s:latest
-done
-# khôi phục code từ AutoBotCk_Backend_vps_backup rồi:
-docker compose up -d --no-build stock-predict-api celery-worker celery-beat celery-flower
+docker compose up -d --no-build
+docker exec nginx-proxy nginx -s reload
 ```
+Lưu ý: compose cũ khai báo volume theo tên project `autobotck_backend`, trùng với volume external của bản mới nên dữ liệu dùng chung.
 Các cột mới trong DB vô hại với bản cũ, không cần xóa. Muốn tài khoản chạy lại SmartOne: `UPDATE account SET broker='smartone' WHERE ...;`
 
 ## Lưu ý
