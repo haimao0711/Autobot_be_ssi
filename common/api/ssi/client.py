@@ -1,17 +1,30 @@
-"""Quản lý FCTradingClient (SDK chính thức `ssi-fctrading`) cho từng tài khoản."""
+"""Client HTTP kết nối SSI FastConnect API v3.
+
+Quản lý Access Token (qua OTP / Refresh Token) và thực hiện các cuộc gọi REST API
+kèm xác thực JWT và chữ ký số RSA-SHA256 (header X-Signature).
+"""
+import json
 import logging
-import threading
-
 import os
-
+import threading
+import uuid
+import requests
 from django.core.cache import cache as _django_cache
 
-from common.api.ssi.constants import (SSI_TRADING_URL, WRITER_TOKEN_CACHE_KEY,
-                                      WRITER_TOKEN_CACHE_TTL)
+from common.api.ssi.constants import (
+    ACCESS_TOKEN_CACHE_KEY,
+    ENDPOINT_AUTH_REFRESH,
+    ENDPOINT_AUTH_REQUEST_OTP,
+    ENDPOINT_AUTH_TOKEN,
+    REFRESH_TOKEN_CACHE_KEY,
+    SSI_BASE_URL,
+    TOKEN_CACHE_TTL,
+    WRITER_TOKEN_CACHE_KEY,
+)
+from common.api.ssi.signature import sign_payload
 
 logger = logging.getLogger(__name__)
 
-_clients = {}
 _lock = threading.Lock()
 
 
@@ -20,11 +33,7 @@ class SSIAuthError(Exception):
 
 
 class _TokenStore:
-    """Lưu writer token dùng chung giữa các container (api, celery-worker...).
-
-    Production đang dùng cache theo từng tiến trình (LocMem/memcached không tồn tại),
-    nên lưu bằng Redis trực tiếp; nếu Redis không dùng được thì fallback Django cache.
-    """
+    """Lưu token dùng chung giữa các container (api, celery-worker...) qua Redis."""
 
     def _redis(self):
         import redis
@@ -59,11 +68,6 @@ class _TokenStore:
 cache = _TokenStore()
 
 
-def _read_private_key(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
 def get_account(user_account=None, trade_account=None):
     """Tìm Account SSI theo số tài khoản giao dịch, fallback theo tên."""
     from apps.account.detail.models import Account
@@ -76,95 +80,192 @@ def get_account(user_account=None, trade_account=None):
     return account
 
 
-def get_client(account):
-    """Trả về FCTradingClient (có token đọc). Mỗi consumer_id dùng chung một client."""
-    from ssi_fctrading import FCTradingClient
-
-    key = account.ssi_consumer_id
-    with _lock:
-        client = _clients.get(key)
-        if client is None:
-            client = FCTradingClient(
-                SSI_TRADING_URL,
-                account.ssi_consumer_id,
-                account.ssi_consumer_secret,
-                _read_private_key(account.ssi_private_key_path),
-                account.ssi_two_fa_type,
-            )
-            _clients[key] = client
-        return client
-
-
-def reset_client(account):
-    with _lock:
-        _clients.pop(getattr(account, "ssi_consumer_id", None), None)
+def request_otp(account) -> dict:
+    """Yêu cầu SSI gửi OTP qua SMS/Email hoặc nhận notification duyệt SmartOTP trên iBoard."""
+    url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_REQUEST_OTP}"
+    body = {
+        "apiKey": account.ssi_consumer_id,
+        "apiSecret": account.ssi_consumer_secret,
+    }
+    headers = {"Content-Type": "application/json"}
+    logger.info("Yêu cầu gửi OTP SSI cho apiKey %s...", account.ssi_consumer_id[:8])
+    res = requests.post(url, json=body, headers=headers, timeout=10)
+    data = res.json()
+    if res.status_code != 200:
+        err_msg = data.get("message") or data.get("error") or str(data)
+        logger.error("Yêu cầu gửi OTP thất bại: %s", err_msg)
+        raise SSIAuthError(f"Gửi OTP thất bại: {err_msg}")
+    return data
 
 
-def request_otp(account):
-    """Yêu cầu SSI gửi OTP (chỉ dùng khi ssi_two_fa_type = 1)."""
-    from ssi_fctrading.models import fcmodel_requests
-    client = get_client(account)
-    return client.get_otp(fcmodel_requests.GetOTP(account.ssi_consumer_id, account.ssi_consumer_secret))
+def get_access_token(account, otp: str = None, transaction_id: str = None) -> str:
+    """Lấy JWT AccessToken từ SSI v3 (/api/v3/auth/token) và lưu vào Redis."""
+    url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_TOKEN}"
+    body = {
+        "apiKey": account.ssi_consumer_id,
+        "apiSecret": account.ssi_consumer_secret,
+    }
+    if otp:
+        body["otp"] = str(otp).strip()
+    if transaction_id:
+        body["transactionId"] = str(transaction_id).strip()
+
+    headers = {"Content-Type": "application/json"}
+    res = requests.post(url, json=body, headers=headers, timeout=10)
+    data = res.json()
+    if res.status_code != 200:
+        err_msg = data.get("message") or data.get("error") or str(data)
+        logger.error("Lấy AccessToken SSI v3 thất bại: %s", err_msg)
+        raise SSIAuthError(f"Xác thực SSI thất bại: {err_msg}")
+
+    # SSI v3 trả về dạng { accessToken, refreshToken, expiresAt, ... } hoặc bọc trong data
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    access_token = payload.get("accessToken")
+    refresh_token = payload.get("refreshToken")
+
+    if not access_token:
+        raise SSIAuthError(f"Phản hồi không chứa accessToken: {data}")
+
+    # Lưu vào Redis
+    cid = account.ssi_consumer_id
+    cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
+    cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
+    if refresh_token:
+        cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), refresh_token, timeout=TOKEN_CACHE_TTL * 7)
+
+    logger.info("Đã lưu SSI AccessToken thành công cho apiKey %s", cid[:8])
+    return access_token
 
 
-def verify_code(account, code=None):
-    """Xác thực PIN/OTP để lấy writer token, lưu vào cache dùng chung giữa các worker."""
-    client = get_client(account)
-    code = code or account.ssi_pin
-    if not code:
-        raise SSIAuthError("Thiếu mã PIN/OTP để xác thực giao dịch SSI")
+def refresh_access_token(account) -> str:
+    """Làm mới AccessToken bằng RefreshToken (/api/v3/auth/refresh)."""
+    cid = account.ssi_consumer_id
+    refresh_token = cache.get(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
+    if not refresh_token:
+        raise SSIAuthError("Không có RefreshToken để làm mới phiên SSI")
+
+    url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_REFRESH}"
+    body = {"refreshToken": refresh_token}
+    headers = {"Content-Type": "application/json"}
+    res = requests.post(url, json=body, headers=headers, timeout=10)
+    data = res.json()
+    if res.status_code != 200:
+        logger.warning("Refresh token SSI thất bại: %s", data)
+        raise SSIAuthError("Phiên SSI đã hết hạn, cần xác thực OTP mới")
+
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    access_token = payload.get("accessToken")
+    new_refresh = payload.get("refreshToken")
+
+    if access_token:
+        cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
+        cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
+    if new_refresh:
+        cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), new_refresh, timeout=TOKEN_CACHE_TTL * 7)
+
+    return access_token
+
+
+def verify_code(account, code=None) -> str:
+    """Xác thực mã PIN/OTP để lấy token lưu vào cache."""
+    code = code or getattr(account, "ssi_pin", None)
+    return get_access_token(account, otp=code)
+
+
+def ensure_token(account) -> str:
+    """Lấy token hợp lệ từ cache, tự động refresh nếu cần."""
+    cid = account.ssi_consumer_id
+    token = cache.get(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid))
+    if token:
+        return token
+
+    # Thử refresh bằng refresh token
     try:
-        token = client.verifyCode(code)
-    except Exception as e:  # SDK ném NameError(message) khi sai mã
-        raise SSIAuthError(str(e))
-    cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=account.ssi_consumer_id),
-              token, timeout=WRITER_TOKEN_CACHE_TTL)
-    return token
-
-
-def _load_cached_writer_token(client, account):
-    from ssi_fctrading.models import AccessTokenModel, fcmodel_responses
-    token = cache.get(WRITER_TOKEN_CACHE_KEY.format(consumer_id=account.ssi_consumer_id))
-    if not token:
-        return False
-    try:
-        model = AccessTokenModel(fcmodel_responses.AccessToken(accessToken=token))
+        return refresh_access_token(account)
     except Exception:
-        return False
-    if model.is_expired():
-        return False
-    client._write_access_token = model
-    return True
+        pass
+
+    # Nếu tài khoản dùng PIN thì thử verify tự động
+    if getattr(account, "ssi_two_fa_type", 1) == 0 and getattr(account, "ssi_pin", None):
+        return verify_code(account, account.ssi_pin)
+
+    raise SSIAuthError("SSI token đã hết hạn hoặc chưa đăng nhập OTP")
 
 
 def ensure_writer(account):
-    """Đảm bảo client có writer token hợp lệ trước khi đặt/sửa/hủy lệnh.
-
-    - twoFA = 0 (PIN): tự verify bằng ssi_pin.
-    - twoFA = 1 (OTP): cần người dùng verify OTP qua API đăng nhập; nếu chưa có
-      token hợp lệ trong cache thì ném SSIAuthError.
-    """
-    client = get_client(account)
-    if account.ssi_two_fa_type != 0:
-        # OTP: Redis là nguồn sự thật duy nhất. Nếu token đã bị xóa (đăng xuất hằng ngày)
-        # hoặc hết hạn thì mọi tiến trình phải dừng đặt lệnh, dù còn token trong bộ nhớ.
-        if _load_cached_writer_token(client, account):
-            return client
-        client._write_access_token = None
-        raise SSIAuthError("Writer token SSI hết hạn, cần xác thực OTP lại")
-    current = getattr(client, "_write_access_token", None)
-    if current is not None and not current.is_expired():
-        return client
-    if _load_cached_writer_token(client, account):
-        return client
-    verify_code(account)
-    return client
+    """Đảm bảo có token ghi (tương thích chữ ký hàm cũ)."""
+    return ensure_token(account)
 
 
 def clear_writer_token(account):
-    """Xóa writer token (dùng khi đăng xuất hằng ngày) để buộc nhập OTP mới."""
-    key = WRITER_TOKEN_CACHE_KEY.format(consumer_id=account.ssi_consumer_id)
-    cache.delete(key)
-    client = _clients.get(account.ssi_consumer_id)
-    if client is not None:
-        client._write_access_token = None
+    """Xóa token trong cache (dùng khi đăng xuất / hết ngày)."""
+    cid = account.ssi_consumer_id
+    cache.delete(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid))
+    cache.delete(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid))
+    cache.delete(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
+
+
+def get_device_id() -> str:
+    """Sinh định danh deviceId duy nhất cho máy/container."""
+    node = uuid.getnode()
+    mac = ":".join(f"{(node >> i) & 0xff:02x}" for i in range(0, 48, 8)[::-1])
+    return f"MAC-{mac.upper()}"
+
+
+def send_request(account, method: str, path: str, params: dict = None,
+                 json_body: dict = None, need_signature: bool = False, retries: int = 1) -> dict:
+    """Gửi HTTP request tới SSI FastConnect API v3.
+
+    Tự động gắn Authorization Bearer và ký X-Signature nếu need_signature=True.
+    Tự làm mới token nếu gặp lỗi 401 Unauthorized.
+    """
+    token = ensure_token(account)
+    url = f"{SSI_BASE_URL}{path}"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept-Language": "vi",
+        "User-Agent": "AutoBotCK/2.0 (SSI FastConnect v3)",
+    }
+
+    payload_str = ""
+    if json_body is not None:
+        payload_str = json.dumps(json_body, separators=(",", ":"), ensure_ascii=False)
+
+    if need_signature:
+        sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
+        headers["X-Signature"] = sig
+
+    for attempt in range(retries + 1):
+        try:
+            res = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params,
+                data=payload_str.encode("utf-8") if payload_str else None,
+                timeout=12,
+            )
+
+            # Nếu token hết hạn (401), thử refresh token và thử lại 1 lần
+            if res.status_code == 401 and attempt < retries:
+                logger.warning("SSI 401 Unauthorized, thử làm mới token...")
+                token = refresh_access_token(account)
+                headers["Authorization"] = f"Bearer {token}"
+                if need_signature:
+                    sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
+                    headers["X-Signature"] = sig
+                continue
+
+            try:
+                return res.json()
+            except Exception:
+                return {"status": res.status_code, "text": res.text}
+
+        except Exception as e:
+            logger.error("Lỗi gọi SSI API %s %s: %s", method, path, e)
+            if attempt >= retries:
+                raise
+
+    return {}

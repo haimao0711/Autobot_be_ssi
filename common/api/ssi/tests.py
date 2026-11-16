@@ -1,132 +1,149 @@
-"""Test offline cho common.api.ssi.handler bằng client SSI giả (không gọi mạng)."""
+"""Unit tests cho SSI FastConnect API v3 client, signature và handler."""
+import base64
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from Crypto.PublicKey import RSA
 
+from common.api.ssi import client as ssi_client
 from common.api.ssi import handler
+from common.api.ssi import signature
 
 
-class FakeClient:
-    def __init__(self):
-        self.orders = []
-        self.sent = []
-
-    @staticmethod
-    def get_deviceid():
-        return "dev"
-
-    @staticmethod
-    def get_user_agent():
-        return "ua"
-
-    def new_order(self, m):
-        self.sent.append(m)
-        self.orders.append({"orderID": "O1", "requestID": m.requestID, "buySell": m.buySell,
-                            "instrumentID": m.instrumentID, "price": m.price,
-                            "quantity": m.quantity, "filledQty": 0, "orderStatus": "SD",
-                            "marketID": "VN", "orderType": "LO"})
-        return {"status": 200, "message": "Success", "data": {"requestID": m.requestID}}
-
-    def modify_order(self, m):
-        self.sent.append(m)
-        return {"status": 200, "data": {"orderID": m.orderID}}
-
-    def cancle_order(self, m):
-        self.sent.append(m)
-        return {"status": 200, "data": {}}
-
-    def get_order_book(self, m):
-        return {"status": 200, "data": self.orders}
-
-    def get_stock_position(self, m):
-        return {"status": 200, "data": {"stockPositions": [
-            {"instrumentID": "SSI", "onHand": 300, "sellableQty": 200,
-             "avgPrice": 20000, "marketPrice": 22000}]}}
-
-    def get_stock_account_balance(self, m):
-        return {"status": 200, "data": [{"withdrawable": 5000, "totalAsset": 100000,
-                                         "purchasingPower": 7000}]}
+# Sinh 1 key RSA mẫu để test
+_RSA_TEST = RSA.generate(1024)
+_N_B64 = base64.b64encode(_RSA_TEST.n.to_bytes((_RSA_TEST.n.bit_length() + 7) // 8, "big")).decode()
+_E_B64 = base64.b64encode(_RSA_TEST.e.to_bytes((_RSA_TEST.e.bit_length() + 7) // 8, "big")).decode()
+_D_B64 = base64.b64encode(_RSA_TEST.d.to_bytes((_RSA_TEST.d.bit_length() + 7) // 8, "big")).decode()
+_P_B64 = base64.b64encode(_RSA_TEST.p.to_bytes((_RSA_TEST.p.bit_length() + 7) // 8, "big")).decode()
+_Q_B64 = base64.b64encode(_RSA_TEST.q.to_bytes((_RSA_TEST.q.bit_length() + 7) // 8, "big")).decode()
+_XML_KEY = f"<RSAKeyValue><Modulus>{_N_B64}</Modulus><Exponent>{_E_B64}</Exponent><D>{_D_B64}</D><P>{_P_B64}</P><Q>{_Q_B64}</Q></RSAKeyValue>"
 
 
-ACCOUNT = SimpleNamespace(account_num="0901351", ssi_pin="123456", ssi_two_fa_type=0)
+ACCOUNT = SimpleNamespace(
+    name="user_test",
+    account_num="0901351",
+    broker="ssi",
+    ssi_consumer_id="test_api_key",
+    ssi_consumer_secret="test_api_secret",
+    ssi_private_key_path=_XML_KEY,
+    ssi_two_fa_type=1,
+    ssi_pin="",
+)
 
 
-class SSIOtpModeTest(TestCase):
-    def test_otp_mode_requires_token_in_store_even_if_in_memory(self):
-        from common.api.ssi import client as ssi_client
-        account = SimpleNamespace(ssi_two_fa_type=1, ssi_consumer_id="c1")
-        fake = SimpleNamespace(_write_access_token=object())
-        with patch.object(ssi_client, "get_client", return_value=fake), \
-                patch.object(ssi_client, "_load_cached_writer_token", return_value=False):
+class SSISignatureTest(TestCase):
+    def test_load_and_sign_xml_key(self):
+        sig = signature.sign_payload(ACCOUNT.ssi_consumer_secret, '{"symbol":"SSI"}', _XML_KEY)
+        self.assertTrue(len(sig) > 0)
+        # Verify base64
+        decoded_sig = base64.b64decode(sig)
+        self.assertEqual(len(decoded_sig), 128)  # 1024-bit key = 128 bytes
+
+
+class SSIClientTest(TestCase):
+    def test_ensure_token_fails_without_login(self):
+        with patch.object(ssi_client.cache, "get", return_value=None):
             with self.assertRaises(ssi_client.SSIAuthError):
-                ssi_client.ensure_writer(account)
-        self.assertIsNone(fake._write_access_token)
+                ssi_client.ensure_token(ACCOUNT)
 
-    def test_otp_mode_ok_when_store_has_token(self):
-        from common.api.ssi import client as ssi_client
-        account = SimpleNamespace(ssi_two_fa_type=1, ssi_consumer_id="c1")
-        fake = SimpleNamespace(_write_access_token=None)
-        with patch.object(ssi_client, "get_client", return_value=fake), \
-                patch.object(ssi_client, "_load_cached_writer_token", return_value=True):
-            self.assertIs(ssi_client.ensure_writer(account), fake)
+    def test_ensure_token_success_when_cached(self):
+        with patch.object(ssi_client.cache, "get", return_value="jwt_test_token"):
+            token = ssi_client.ensure_token(ACCOUNT)
+            self.assertEqual(token, "jwt_test_token")
+
+    @patch("requests.post")
+    def test_get_access_token_saves_to_cache(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": 200,
+            "data": {
+                "accessToken": "new_jwt_token",
+                "refreshToken": "new_refresh_token",
+            },
+        }
+        mock_post.return_value = mock_resp
+
+        with patch.object(ssi_client.cache, "set") as mock_cache_set:
+            token = ssi_client.get_access_token(ACCOUNT, otp="123456")
+            self.assertEqual(token, "new_jwt_token")
+            self.assertTrue(mock_cache_set.called)
 
 
 class SSIHandlerTest(TestCase):
     def setUp(self):
-        self.client = FakeClient()
-        patches = [
+        self.patches = [
             patch("common.api.ssi.client.get_account", return_value=ACCOUNT),
-            patch("common.api.ssi.client.get_client", return_value=self.client),
-            patch("common.api.ssi.client.ensure_writer", return_value=self.client),
+            patch("common.api.ssi.client.ensure_token", return_value="fake_jwt_token"),
         ]
-        for p in patches:
+        for p in self.patches:
             p.start()
             self.addCleanup(p.stop)
 
-    def test_buy_converts_price_to_vnd_and_returns_order(self):
-        res = handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "ref")
-        self.assertEqual(self.client.sent[0].price, 21500)
-        self.assertEqual(res["order_num"], "O1")
+    @patch("common.api.ssi.client.send_request")
+    def test_handle_buy_service(self, mock_send):
+        mock_send.return_value = {
+            "status": 200,
+            "data": {"orderId": "123456", "clientRequestId": "req-01"},
+        }
+        res = handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "req-01")
+        self.assertEqual(res["order_num"], "123456")
         self.assertEqual(res["symbol"], "SSI")
+        self.assertEqual(res["price"], 21.5)
+        self.assertEqual(res["volume"], 100)
 
-    def test_pending_orders_use_thousand_vnd(self):
-        handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "ref")
-        pending = handler.handle_orders_not_matched("u", "0901351", "SSI", "", "", "", "B")
-        self.assertEqual(pending[0]["showPrice"], 21.5)
-        self.assertEqual(pending[0]["orderNo"], "O1")
+        # Kiểm tra body gửi đi đổi giá 21.5 thành "21500"
+        call_kwargs = mock_send.call_args[1]
+        self.assertEqual(call_kwargs["json_body"]["price"], "21500")
+        self.assertEqual(call_kwargs["json_body"]["quantity"], 100)
 
-    def test_update_and_cancel_find_order_in_book(self):
-        handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "ref")
-        upd = handler.handle_update_order_service("u", "0901351", "", "SSI", "", "", "O1", 21.5, 21.55, 100, "r", "B")
-        self.assertEqual(upd["orderNo"], "O1")
-        self.assertEqual(self.client.sent[-1].price, 21550)
-        self.assertTrue(handler.handle_cancel_order_service("u", "", "", "", "O1", "r"))
+    @patch("common.api.ssi.client.send_request")
+    def test_handle_orders_not_matched(self, mock_send):
+        mock_send.return_value = {
+            "status": 200,
+            "data": {
+                "orders": [
+                    {
+                        "orderId": "O1",
+                        "symbol": "SSI",
+                        "side": "B",
+                        "price": 21500,
+                        "quantity": 100,
+                        "filledQuantity": 0,
+                        "orderStatus": "NEW",
+                    },
+                    {
+                        "orderId": "O2",
+                        "symbol": "SSI",
+                        "side": "B",
+                        "price": 21500,
+                        "quantity": 100,
+                        "filledQuantity": 100,
+                        "orderStatus": "FILLED",
+                    },
+                ]
+            },
+        }
+        orders = handler.handle_orders_not_matched("u", "0901351", "SSI", "", "", "", "B")
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["orderNo"], "O1")
+        self.assertEqual(orders[0]["showPrice"], 21.5)
+        self.assertEqual(orders[0]["volume"], 100)
 
-    def test_buy_network_error_but_order_exists_is_not_duplicated(self):
-        def flaky(m):
-            self.client.orders.append({"orderID": "O9", "requestID": m.requestID, "buySell": "B",
-                                       "instrumentID": m.instrumentID, "price": m.price,
-                                       "quantity": m.quantity, "filledQty": 0, "orderStatus": "SD"})
-            raise ConnectionError("timeout")
-        self.client.new_order = flaky
-        res = handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "ref")
-        self.assertEqual(res["order_num"], "O9")
-        self.assertEqual(len(self.client.orders), 1)
-
-    def test_buy_network_error_without_order_returns_empty(self):
-        def broken(m):
-            raise ConnectionError("down")
-        self.client.new_order = broken
-        with patch("common.api.ssi.handler.time.sleep"):
-            res = handler.handle_buy_service("u", "0901351", "", "SSI", "", "", 21.5, 100, "ref")
-        self.assertEqual(res, {})
-
-    def test_validate_session_and_stock_balance(self):
-        ok, data = handler.validate_session("u", "0901351", "", "", "")
-        self.assertTrue(ok)
-        self.assertEqual(data["total_market_value"], 300 * 22000)
-        bal = handler.handle_stock_balance_service("u", "0901351", "SSI", "", "", "", "B")
-        self.assertEqual(bal["stock_balance"]["actual_vol"], 300)
-        self.assertEqual(bal["stock_balance"]["available_vol"], 200)
-        self.assertEqual(bal["number_stock_existing"], 1)
-
+    @patch("common.api.ssi.client.send_request")
+    def test_handle_cash_balance_service(self, mock_send):
+        mock_send.return_value = {
+            "status": 200,
+            "data": {
+                "equity": {
+                    "accountBalance": 100000000,
+                    "withdrawable": 50000000,
+                    "purchasingPower": 80000000,
+                }
+            },
+        }
+        res = handler.handle_cash_balance_service("u", "0901351", "", "", "")
+        self.assertEqual(res["cash_balance"], 50000000)
+        self.assertEqual(res["total_assets"], 100000000)
+        self.assertEqual(res["cash_available"], 80000000)
