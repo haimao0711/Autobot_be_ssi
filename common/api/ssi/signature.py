@@ -83,3 +83,4 @@ def sign_payload(secret_key: str, payload_str: str, key_input: str or RSA.RsaKey
     hash_obj = SHA256.new(to_sign)
     signature = pkcs1_15.new(rsa_key).sign(hash_obj)
     return base64.b64encode(signature).decode("utf-8")
+
