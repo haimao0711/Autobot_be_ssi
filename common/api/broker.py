@@ -18,11 +18,9 @@ BROKER_SSI = "ssi"
 def _is_ssi(user_account=None, trade_account=None) -> bool:
     from apps.account.detail.models import Account
     qs = Account.objects.filter(broker=BROKER_SSI)
-    if trade_account and qs.filter(account_num=trade_account).exists():
-        return True
-    # Hàm cancel của SmartOne chỉ có user_account (tên) nên tra theo tên
-    if not trade_account and user_account:
-        return qs.filter(name=user_account).exists()
+    for val in (trade_account, user_account):
+        if val and (qs.filter(account_num=str(val)).exists() or qs.filter(name=str(val)).exists()):
+            return True
     return False
 
 

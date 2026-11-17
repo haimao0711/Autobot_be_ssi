@@ -30,7 +30,7 @@ from ...type.services import ConfigurationTypeServices
 from concurrent.futures import ThreadPoolExecutor
 from apps.authencation.user.models import User
 from apps.account.detail.models import Account
-from common.api.smartone.api import  get_stock_balance
+
 from apps.stockSocket.services.cache_service import get_price
 from apps import api
 import json
@@ -146,6 +146,7 @@ class ConfigurationOverviewServices:
                     session_id = vps_account.vps_session_id
                     request_url = api.TRADING_URL
                     try:
+                        from common.api.smartone.api import get_stock_balance
                         data_res = get_stock_balance(account_name, account_num, request_url, session_id, '')
                         if data_res and hasattr(data_res, 'text'):
                             stock_balance_object = json.loads(data_res.text)
