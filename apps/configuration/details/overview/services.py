@@ -1,4 +1,7 @@
+import logging
 from django.db import transaction
+
+logger = logging.getLogger(__name__)
 
 from common.errors.messages import ErrorMessages
 from common.success.types import SuccessType
@@ -111,15 +114,44 @@ class ConfigurationOverviewServices:
                     'trading_chart_sell' : trading_chart_sell,
                 }
             vps_account = AccountService.get_account_by_user(user)
-            account_name = vps_account.name
-            account_num = vps_account.account_num
-            session_id = vps_account.vps_session_id
-            request_url = api.TRADING_URL
-            data_res = get_stock_balance( account_name, account_num, request_url, session_id, '')
-            stock_balance_text = data_res.text
-            stock_balance_object = json.loads(stock_balance_text)
-            data_balance = stock_balance_object['data']
-            stock_balance_data = [item for item in data_balance ]
+            stock_balance_data = []
+            account_name = getattr(vps_account, 'name', '')
+            account_num = getattr(vps_account, 'account_num', '')
+
+            if vps_account:
+                if getattr(vps_account, 'broker', 'smartone') == 'ssi':
+                    from common.api.ssi import client as ssi_client
+                    from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
+                    try:
+                        res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
+                        data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
+                        equity = []
+                        if isinstance(data, dict):
+                            equity = data.get('equity') or data.get('positions') or []
+                        elif isinstance(data, list):
+                            equity = data
+                        stock_balance_data = [
+                            {
+                                'symbol': p.get('symbol'),
+                                'actual_vol': p.get('quantity', 0),
+                                'avaiable_vol': p.get('sellableQuantity', 0),
+                                'avg_price': p.get('avgPrice', 0),
+                                'gain_loss_per': p.get('gainLossPercentage', 0),
+                            }
+                            for p in equity if isinstance(p, dict)
+                        ]
+                    except Exception as e:
+                        logger.error(f"SSI stock balance error in config: {e}")
+                else:
+                    session_id = vps_account.vps_session_id
+                    request_url = api.TRADING_URL
+                    try:
+                        data_res = get_stock_balance(account_name, account_num, request_url, session_id, '')
+                        if data_res and hasattr(data_res, 'text'):
+                            stock_balance_object = json.loads(data_res.text)
+                            stock_balance_data = stock_balance_object.get('data', []) or []
+                    except Exception as e:
+                        logger.error(f"SmartOne stock balance error in config: {e}")
             # Xử lý đồng thời với ThreadPoolExecutor
             def process_configuration(configuration):
                 stock_name = configuration.stock.name
