@@ -81,10 +81,18 @@ class AuthencationStockExchagesView(APIView):
             # SSI FastConnect: không có session web, xác thực bằng PIN/OTP để lấy writer token
             from common.api.ssi import client as ssi_client
             try:
-                if vps_account.ssi_two_fa_type == 1 and not otp:
-                    ssi_client.request_otp(vps_account)
-                    return Response({"data": {"message": "Đã gửi OTP SSI, vui lòng nhập OTP!", "status": 0}}, status=HTTP_400_BAD_REQUEST)
-                ssi_client.verify_code(vps_account, otp or None)
+                # Nếu đã có token hợp lệ trong cache thì tái sử dụng mà không cần bắt nhập lại OTP
+                token = None
+                if not otp:
+                    try:
+                        token = ssi_client.ensure_token(vps_account)
+                    except Exception:
+                        pass
+                if not token:
+                    if vps_account.ssi_two_fa_type == 1 and not otp:
+                        ssi_client.request_otp(vps_account)
+                        return Response({"data": {"message": "Đã gửi OTP SSI, vui lòng nhập OTP!", "status": 0}}, status=HTTP_400_BAD_REQUEST)
+                    ssi_client.verify_code(vps_account, otp or None)
             except Exception as e:
                 logger.error("Xác thực SSI thất bại: %s", e)
                 return Response({"data": {"message": f"Xác thực SSI thất bại: {e}", "status": 0}}, status=HTTP_400_BAD_REQUEST)
