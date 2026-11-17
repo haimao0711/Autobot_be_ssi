@@ -1,0 +1,18 @@
+docker exec -it autobotck_backend_ssi-stock-predict-api-1 python manage.py shell -c "
+from apps.account.models import Account
+from common.api.ssi import client, handler
+acc = Account.objects.get(id=25)
+otp_code = '805780'  # Thay bằng mã OTP 6 số từ iBoard
+
+print('--- Đang gửi OTP để lấy AccessToken giao dịch...')
+token = client.get_access_token(acc, otp=otp_code)
+print('>>> Lấy Token THÀNH CÔNG! Token:', token[:30], '...')
+
+print('--- Đang truy vấn Số dư tài khoản...')
+cash = handler.handle_cash_balance_service(acc.name, acc.account_num, '', '', '')
+print('>>> SỐ DƯ TÀI KHOẢN:', cash)
+
+print('--- Đang truy vấn Danh mục cổ phiếu...')
+stocks = handler.handle_stock_balance_service(acc.name, acc.account_num, 'SSI', '', '', '', 'B')
+print('>>> VỊ THẾ DANH MỤC:', stocks)
+"
