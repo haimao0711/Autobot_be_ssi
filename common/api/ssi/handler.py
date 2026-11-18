@@ -402,14 +402,27 @@ def _get_cash(account) -> dict:
     )
     if not _ok(res):
         return None
-    data = res.get("data") if isinstance(res.get("data"), dict) else res.get("result") or {}
-    equity = data.get("equity") if isinstance(data, dict) else {}
-    if not isinstance(equity, dict):
-        equity = data if isinstance(data, dict) else {}
+
+    # SSI REST v3 trả về dạng:
+    # 1. Root dict: res.get("equity")
+    # 2. Hoặc bọc trong: res.get("data", {}).get("equity") / res.get("result", {}).get("equity")
+    equity = {}
+    if isinstance(res, dict):
+        if isinstance(res.get("equity"), dict):
+            equity = dict(res["equity"])
+        elif isinstance(res.get("data"), dict) and isinstance(res["data"].get("equity"), dict):
+            equity = dict(res["data"]["equity"])
+        elif isinstance(res.get("result"), dict) and isinstance(res["result"].get("equity"), dict):
+            equity = dict(res["result"]["equity"])
+        elif isinstance(res.get("data"), dict):
+            equity = dict(res["data"])
+        else:
+            equity = dict(res)
+
     if not isinstance(equity, dict):
         equity = {}
 
-    # Thử lấy thêm purchasing power từ ppmmrAccount nếu cần
+    # Thử lấy thêm purchasing power và totalAssets từ ppmmrAccount
     try:
         res_pp = ssi_client.send_request(
             account,
@@ -417,14 +430,18 @@ def _get_cash(account) -> dict:
             path=ENDPOINT_TRADING_PPMMR,
             params=params,
         )
-        if _ok(res_pp):
-            pp_data = res_pp.get("data") if isinstance(res_pp.get("data"), dict) else res_pp.get("result") or {}
-            pp_equity = pp_data.get("equity") if isinstance(pp_data, dict) else {}
+        if _ok(res_pp) and isinstance(res_pp, dict):
+            pp_equity = res_pp.get("equity")
+            if not isinstance(pp_equity, dict) and isinstance(res_pp.get("data"), dict):
+                pp_equity = res_pp["data"].get("equity") or res_pp["data"]
+            if not isinstance(pp_equity, dict) and isinstance(res_pp.get("result"), dict):
+                pp_equity = res_pp["result"].get("equity") or res_pp["result"]
             if isinstance(pp_equity, dict):
-                equity["purchasingPower"] = pp_equity.get("purchasingPower") or equity.get("purchasingPower")
-                equity["marginRatio"] = pp_equity.get("marginRatio") or equity.get("marginRatio")
-    except Exception:
-        pass
+                for k in ("purchasingPower", "marginRatio", "totalAssets", "totalEquity", "ee", "ee50"):
+                    if pp_equity.get(k) is not None:
+                        equity[k] = pp_equity[k]
+    except Exception as e:
+        logger.warning("Lỗi lấy ppmmrAccount: %s", e)
 
     return equity
 
@@ -438,15 +455,20 @@ def _get_positions(account) -> list:
         path=ENDPOINT_TRADING_POSITION,
         params=params,
     )
-    data = res.get("data") if isinstance(res.get("data"), dict) else res.get("result") or {}
-    if isinstance(data, dict):
-        equity = data.get("equity")
-        if isinstance(equity, list):
-            return [d for d in equity if isinstance(d, dict)]
-        positions = data.get("positions") or data.get("stockPositions")
-        if isinstance(positions, list):
-            return [d for d in positions if isinstance(d, dict)]
-    return _as_list(data)
+    if not isinstance(res, (dict, list)):
+        return []
+    if isinstance(res, list):
+        return [d for d in res if isinstance(d, dict)]
+
+    for container in (res, res.get("data"), res.get("result")):
+        if isinstance(container, dict):
+            for k in ("equity", "positions", "stockPositions", "holdings"):
+                val = container.get(k)
+                if isinstance(val, list):
+                    return [d for d in val if isinstance(d, dict)]
+        elif isinstance(container, list):
+            return [d for d in container if isinstance(d, dict)]
+    return _as_list(res)
 
 
 def handle_cash_balance_service(user_account, trade_account, url, session, asp_net_session):
@@ -458,9 +480,9 @@ def handle_cash_balance_service(user_account, trade_account, url, session, asp_n
         logger.error("SSI cash balance lỗi: %s", e)
         return {}
 
-    withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", default=0))
-    account_balance = _num(_first(cash, "accountBalance", "totalAsset", "cashBal", default=0))
-    purchasing_power = _num(_first(cash, "purchasingPower", "withdrawable", default=withdrawable))
+    withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
+    account_balance = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
+    purchasing_power = _num(_first(cash, "purchasingPower", "ee50", "withdrawable", default=withdrawable))
 
     return {
         "symbol": "VND",
@@ -570,9 +592,9 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
     except Exception:
         market_value = 0
 
-    withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", default=0))
-    account_bal = _num(_first(cash, "accountBalance", "totalAsset", "cashBal", default=0))
-    purchasing = _num(_first(cash, "purchasingPower", "withdrawable", default=withdrawable))
+    withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
+    account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
+    purchasing = _num(_first(cash, "purchasingPower", "ee50", "withdrawable", default=withdrawable))
 
     return True, {
         "total_equity": int(account_bal + market_value),
