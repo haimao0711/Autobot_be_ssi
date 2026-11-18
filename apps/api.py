@@ -1,2 +1,2 @@
-TRADING_URL = "https://bgapi.vps.com.vn/handler/core.vpbs"
-LOGIN_URL = 'https://bgapi.vps.com.vn/handler/core_check.login'
+TRADING_URL = "https://api.ssi.com.vn"
+LOGIN_URL = "https://api.ssi.com.vn"

@@ -26,8 +26,8 @@ class Account(models.Model):
     vps_channel = models.CharField(null=True, default='I')
 
     # Broker & SSI FastConnect fields
-    BROKER_CHOICES = [('smartone', 'SmartOne (VPS)'), ('ssi', 'SSI FastConnect')]
-    broker = models.CharField(max_length=20, choices=BROKER_CHOICES, default='smartone')
+    BROKER_CHOICES = [('ssi', 'SSI FastConnect'), ('smartone', 'SmartOne (VPS)')]
+    broker = models.CharField(max_length=20, choices=BROKER_CHOICES, default='ssi')
     ssi_consumer_id = models.CharField(max_length=100, null=True, blank=True)
     ssi_consumer_secret = models.CharField(max_length=200, null=True, blank=True)
     # Đường dẫn file private key RSA (không lưu nội dung khóa trong DB)

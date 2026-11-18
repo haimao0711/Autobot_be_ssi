@@ -159,42 +159,29 @@ class ConfigurationOverviewServices:
                         stock_balance_data = []
 
                 if not stock_balance_data:
-                    if getattr(vps_account, 'broker', 'smartone') == 'ssi':
-                        from common.api.ssi import client as ssi_client
-                        from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
-                        try:
-                            res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
-                            data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
-                            equity = []
-                            if isinstance(data, dict):
-                                equity = data.get('equity') or data.get('positions') or []
-                            elif isinstance(data, list):
-                                equity = data
-                            stock_balance_data = [
-                                {
-                                    'symbol': p.get('symbol'),
-                                    'actual_vol': p.get('quantity', 0),
-                                    'avaiable_vol': p.get('sellableQuantity', 0),
-                                    'avg_price': p.get('avgPrice', 0),
-                                    'gain_loss_per': p.get('gainLossPercentage', 0),
-                                }
-                                for p in equity if isinstance(p, dict)
-                            ]
-                            ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
-                        except Exception as e:
-                            logger.error(f"SSI stock balance error in config: {e}")
-                    else:
-                        session_id = vps_account.vps_session_id
-                        request_url = api.TRADING_URL
-                        try:
-                            from common.api.smartone.api import get_stock_balance
-                            data_res = get_stock_balance(account_name, account_num, request_url, session_id, '')
-                            if data_res and hasattr(data_res, 'text'):
-                                stock_balance_object = json.loads(data_res.text)
-                                stock_balance_data = stock_balance_object.get('data', []) or []
-                                ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
-                        except Exception as e:
-                            logger.error(f"SmartOne stock balance error in config: {e}")
+                    from common.api.ssi import client as ssi_client
+                    from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
+                    try:
+                        res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
+                        data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
+                        equity = []
+                        if isinstance(data, dict):
+                            equity = data.get('equity') or data.get('positions') or []
+                        elif isinstance(data, list):
+                            equity = data
+                        stock_balance_data = [
+                            {
+                                'symbol': p.get('symbol'),
+                                'actual_vol': p.get('quantity', 0),
+                                'avaiable_vol': p.get('sellableQuantity', 0),
+                                'avg_price': p.get('avgPrice', 0),
+                                'gain_loss_per': p.get('gainLossPercentage', 0),
+                            }
+                            for p in equity if isinstance(p, dict)
+                        ]
+                        ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
+                    except Exception as e:
+                        logger.error(f"SSI stock balance error in config: {e}")
 
             # Xử lý đồng thời
             def process_configuration(configuration):

@@ -59,7 +59,7 @@ class AccountViews(APIView):
                 "status": account.status,
                 "login_status": account.login_status,
                 "alias": account.alias,
-                "broker": getattr(account, "broker", "smartone"),
+                "broker": getattr(account, "broker", "ssi"),
                 "account_num": getattr(account, "account_num", ""),
                 # "limits": trading_limits.limit
             }

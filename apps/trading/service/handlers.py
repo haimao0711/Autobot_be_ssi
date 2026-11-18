@@ -654,7 +654,7 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
 
                 buy_attrs = {
                     "user_account": account,
-                    "platform_trading": "Smart One",
+                    "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "level": level,
                     "price": price_to_start,
@@ -747,7 +747,7 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
 
                     buy_attrs = {
                         "user_account": account,
-                        "platform_trading": "Smart One",
+                        "platform_trading": "SSI FastConnect v3",
                         "stock": stock.name,
                         "level": level,
                         "price": price_to_start,
@@ -786,7 +786,7 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                         price_to_start = 0  # Giá trị mặc định nếu có lỗi
                 buy_attrs = {
                     "user_account": account,
-                    "platform_trading": "Smart One",
+                    "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "level": level,
                     "price": price_to_start if price_to_start is not None else 0,
@@ -897,7 +897,7 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                     logger.info(f"Debug Buy Volume Calculation: volume_to_buy={volume_to_buy}, stock_balance={stock_balance}, volume_calc={volume_calc}, max_volume_by_cash={max_volume_by_cash}, final_volume={volume}")
                     buy_attrs = {
                         "user_account": account,
-                        "platform_trading": "Smart One",
+                        "platform_trading": "SSI FastConnect v3",
                         "stock": stock.name,
                         "level": level,
                         "price": price_set_buy,
@@ -1348,7 +1348,7 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                 start_time_order = time_now.strftime("%H:%M:%S ngày %d-%m-%Y")
                 sell_attrs = {
                     "user_account": account,
-                    "platform_trading": "Smart One",
+                    "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "volume": 0,
                     "price": price_to_start,
@@ -1463,7 +1463,7 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                 start_time_order = time_now.strftime("%H:%M:%S ngày %d-%m-%Y")
                 sell_attrs = {
                     "user_account": account,
-                    "platform_trading": "Smart One",
+                    "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "volume": 0,
                     "price": price_to_start if price_to_start is not None else 0,
@@ -1542,7 +1542,7 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                 sell_messages = []
                 sell_attrs = {
                     "user_account": account,
-                    "platform_trading": "Smart One",
+                    "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "volume": volume,
                     "price": price_set_sell,
@@ -2024,7 +2024,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
             start_time_order = time_now.strftime("%H:%M:%S ngày %d-%m-%Y")
             buy_attrs = {
                 "user_account": account,
-                "platform_trading": "Smart One",
+                "platform_trading": "SSI FastConnect v3",
                 "stock": stock.name,
                 "level": level,
                 "current_price": round(price_current, 2),
@@ -2712,7 +2712,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
             price_to_start = (stock_data_trading.iloc[-1].get('open', 0) + stock_data_trading.iloc[-1].get('close', 0))/2           
             sell_attrs = {
                 "user_account": account,
-                "platform_trading": "Smart One",
+                "platform_trading": "SSI FastConnect v3",
                 "stock": stock.name,
                 "volume": int(volume_balance_trade),
                 "price": price_to_start,
@@ -2720,7 +2720,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
             }
             sell_take_profit = {
                 "user_account": account,
-                "platform_trading": "Smart One",
+                "platform_trading": "SSI FastConnect v3",
                 "stock": stock.name,
                 "volume": volume_take_profit,
                 "price": price_to_start,                

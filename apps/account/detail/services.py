@@ -25,8 +25,8 @@ class AccountService:
         return Account.objects.all()
 
     def update_all_accounts_login_status():
-        # Tài khoản SSI: xóa token đặt lệnh để hôm sau phải nhập OTP mới
-        for ssi_account in Account.objects.filter(broker='ssi', login_status=AccountLoginStatusEnum.LoginSuccess.value):
+        # Xóa token đặt lệnh SSI để hôm sau phải nhập OTP mới
+        for ssi_account in Account.objects.filter(login_status=AccountLoginStatusEnum.LoginSuccess.value):
             try:
                 from common.api.ssi.client import clear_writer_token
                 clear_writer_token(ssi_account)

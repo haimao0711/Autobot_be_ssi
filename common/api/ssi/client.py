@@ -85,17 +85,12 @@ cache = _TokenStore()
 def get_account(user_account=None, trade_account=None):
     """Tìm Account SSI theo số tài khoản giao dịch, fallback theo tên."""
     from apps.account.detail.models import Account
-    qs = Account.objects.filter(broker__iexact="ssi")
+    qs = Account.objects.all()
     account = None
     if trade_account:
         account = qs.filter(account_num=trade_account).first()
     if account is None and user_account:
         account = qs.filter(name=user_account).first()
-    if account is None:
-        if trade_account:
-            account = Account.objects.filter(account_num=trade_account).first()
-        if account is None and user_account:
-            account = Account.objects.filter(name=user_account).first()
     return account
 
 
