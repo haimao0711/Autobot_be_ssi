@@ -207,7 +207,7 @@ class TradingViewsIsTrading(APIView):
             is_valid_session, financial_data = validate_session(account_name, account_num, url, session_id, '')
             is_trading = is_valid_session and status_scheduler
             
-            if financial_data:
+            if is_valid_session and financial_data:
                 return Response({
                     "is_trading": is_trading,
                     "account_name": account_name,
@@ -223,7 +223,7 @@ class TradingViewsIsTrading(APIView):
                 })
             else:
                 return Response({
-                    "is_trading": is_trading,
+                    "is_trading": False,
                     "account_name": account_name,
                     "account_num": account_num,
                     "total_equity": 0,

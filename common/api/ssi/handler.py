@@ -400,10 +400,16 @@ def _get_cash(account) -> dict:
         path=ENDPOINT_TRADING_ACCOUNT_BALANCE,
         params=params,
     )
+    if not _ok(res):
+        return None
     data = res.get("data") if isinstance(res.get("data"), dict) else res.get("result") or {}
+    if not data and not res.get("accountBalance") and not res.get("cashBalance"):
+        return None
     equity = data.get("equity") if isinstance(data, dict) else {}
     if not isinstance(equity, dict):
-        equity = {}
+        equity = data if isinstance(data, dict) else {}
+    if not equity and not data:
+        return None
 
     # Thử lấy thêm purchasing power từ ppmmrAccount nếu cần
     try:
@@ -413,11 +419,12 @@ def _get_cash(account) -> dict:
             path=ENDPOINT_TRADING_PPMMR,
             params=params,
         )
-        pp_data = res_pp.get("data") if isinstance(res_pp.get("data"), dict) else res_pp.get("result") or {}
-        pp_equity = pp_data.get("equity") if isinstance(pp_data, dict) else {}
-        if isinstance(pp_equity, dict):
-            equity["purchasingPower"] = pp_equity.get("purchasingPower") or equity.get("purchasingPower")
-            equity["marginRatio"] = pp_equity.get("marginRatio") or equity.get("marginRatio")
+        if _ok(res_pp):
+            pp_data = res_pp.get("data") if isinstance(res_pp.get("data"), dict) else res_pp.get("result") or {}
+            pp_equity = pp_data.get("equity") if isinstance(pp_data, dict) else {}
+            if isinstance(pp_equity, dict):
+                equity["purchasingPower"] = pp_equity.get("purchasingPower") or equity.get("purchasingPower")
+                equity["marginRatio"] = pp_equity.get("marginRatio") or equity.get("marginRatio")
     except Exception:
         pass
 
@@ -537,7 +544,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         try:
             ssi_client.ensure_token(account)
             cash = _get_cash(account)
-            if cash is not None:
+            if cash:
                 break
         except SSIAuthError as e:
             logger.error("SSI auth lỗi: %s", e)
@@ -546,7 +553,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
             logger.warning("SSI validate lỗi (lần %s/%s): %s", attempt + 1, retries + 1, e)
         time.sleep(1)
 
-    if cash is None:
+    if not cash:
         return False, {}
 
     try:

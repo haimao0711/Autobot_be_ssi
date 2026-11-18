@@ -287,24 +287,40 @@ def send_request(account, method: str, path: str, params: dict = None,
             )
 
             # Nếu token hết hạn (401), thử refresh token và thử lại 1 lần
-            if res.status_code == 401 and attempt < retries:
-                logger.warning("SSI 401 Unauthorized, thử làm mới token...")
-                try:
-                    token = refresh_access_token(account)
-                except Exception as e:
+            if res.status_code == 401:
+                if attempt < retries:
+                    logger.warning("SSI 401 Unauthorized, thử làm mới token...")
+                    try:
+                        token = refresh_access_token(account)
+                    except Exception as e:
+                        clear_writer_token(account)
+                        raise SSIAuthError(f"Phiên SSI đã hết hạn, cần xác thực OTP mới: {e}")
+                    headers["Authorization"] = f"Bearer {token}"
+                    if need_signature:
+                        sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
+                        headers["X-Signature"] = sig
+                    continue
+                else:
                     clear_writer_token(account)
-                    raise SSIAuthError(f"Phiên SSI đã hết hạn, cần xác thực OTP mới: {e}")
-                headers["Authorization"] = f"Bearer {token}"
-                if need_signature:
-                    sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
-                    headers["X-Signature"] = sig
-                continue
+                    raise SSIAuthError("Phiên SSI đã hết hạn, cần xác thực OTP mới")
 
             try:
-                return res.json()
+                data = res.json()
             except Exception:
-                return {"status": res.status_code, "text": res.text}
+                data = {"status": res.status_code, "text": res.text}
 
+            # Kiểm tra nếu HTTP status không thành công
+            if res.status_code != 200:
+                logger.error("SSI API %s %s trả về mã HTTP %s: %s", method, path, res.status_code, data)
+                if res.status_code in (401, 403):
+                    clear_writer_token(account)
+                    raise SSIAuthError(f"Phiên SSI đã hết hạn hoặc không có quyền: {data}")
+                return data
+
+            return data
+
+        except SSIAuthError:
+            raise
         except Exception as e:
             logger.error("Lỗi gọi SSI API %s %s: %s", method, path, e)
             if attempt >= retries:
