@@ -403,13 +403,11 @@ def _get_cash(account) -> dict:
     if not _ok(res):
         return None
     data = res.get("data") if isinstance(res.get("data"), dict) else res.get("result") or {}
-    if not data and not res.get("accountBalance") and not res.get("cashBalance"):
-        return None
     equity = data.get("equity") if isinstance(data, dict) else {}
     if not isinstance(equity, dict):
         equity = data if isinstance(data, dict) else {}
-    if not equity and not data:
-        return None
+    if not isinstance(equity, dict):
+        equity = {}
 
     # Thử lấy thêm purchasing power từ ppmmrAccount nếu cần
     try:
@@ -539,12 +537,19 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         logger.error("SSI validate_session: không tìm thấy tài khoản %s", trade_account or user_account)
         return False, {}
 
+    try:
+        ssi_client.ensure_token(account)
+    except SSIAuthError as e:
+        logger.error("SSI auth lỗi: %s", e)
+        return False, {}
+    except Exception:
+        return False, {}
+
     cash = None
     for attempt in range(retries + 1):
         try:
-            ssi_client.ensure_token(account)
             cash = _get_cash(account)
-            if cash:
+            if cash is not None:
                 break
         except SSIAuthError as e:
             logger.error("SSI auth lỗi: %s", e)
@@ -553,7 +558,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
             logger.warning("SSI validate lỗi (lần %s/%s): %s", attempt + 1, retries + 1, e)
         time.sleep(1)
 
-    if not cash:
+    if cash is None:
         return False, {}
 
     try:

@@ -107,18 +107,8 @@ class AuthencationStockExchagesView(APIView):
                         }
                     }, status=HTTP_400_BAD_REQUEST)
 
-                # Kiểm tra số dư / session sau khi đã có token mới
+                # Token đã xác thực thành công từ SSI và lưu vào Redis
                 session_id = 'ssi'
-                is_valid_session, session_info = validate_session(account_name, account_num, url, session_id, '')
-                if not is_valid_session:
-                    return Response({
-                        "data": {
-                            "message": "Không thể kết nối phiên SSI. Vui lòng thử lại!",
-                            "status": 0,
-                            "require_otp": True
-                        }
-                    }, status=HTTP_400_BAD_REQUEST)
-
                 if session_id != session_id_old:
                     ConfigurationOverviewServices.restart_request_trade_overview(user)  # Reset is_trading và mua/bán tay
 
