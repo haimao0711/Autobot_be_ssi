@@ -34,6 +34,7 @@ class SSIAuthError(Exception):
 
 class _TokenStore:
     """Lưu token dùng chung giữa các container (api, celery-worker...) qua Redis."""
+    _mem = {}
 
     def _redis(self):
         import redis
@@ -46,7 +47,10 @@ class _TokenStore:
             return
         except Exception as e:
             logger.warning("SSI token store: Redis lỗi (%s), dùng Django cache", e)
-        _django_cache.set(key, value, timeout=timeout)
+        try:
+            _django_cache.set(key, value, timeout=timeout)
+        except Exception:
+            self._mem[key] = value
 
     def get(self, key):
         try:
@@ -55,14 +59,24 @@ class _TokenStore:
                 return value
         except Exception as e:
             logger.warning("SSI token store: Redis lỗi (%s), dùng Django cache", e)
-        return _django_cache.get(key)
+        try:
+            val = _django_cache.get(key)
+            if val is not None:
+                return val
+        except Exception:
+            pass
+        return self._mem.get(key)
 
     def delete(self, key):
         try:
             self._redis().delete(key)
         except Exception as e:
             logger.warning("SSI token store: Redis lỗi khi xóa (%s)", e)
-        _django_cache.delete(key)
+        try:
+            _django_cache.delete(key)
+        except Exception:
+            pass
+        self._mem.pop(key, None)
 
 
 cache = _TokenStore()
@@ -71,12 +85,17 @@ cache = _TokenStore()
 def get_account(user_account=None, trade_account=None):
     """Tìm Account SSI theo số tài khoản giao dịch, fallback theo tên."""
     from apps.account.detail.models import Account
-    qs = Account.objects.filter(broker="ssi")
+    qs = Account.objects.filter(broker__iexact="ssi")
     account = None
     if trade_account:
         account = qs.filter(account_num=trade_account).first()
     if account is None and user_account:
         account = qs.filter(name=user_account).first()
+    if account is None:
+        if trade_account:
+            account = Account.objects.filter(account_num=trade_account).first()
+        if account is None and user_account:
+            account = Account.objects.filter(name=user_account).first()
     return account
 
 
@@ -95,6 +114,10 @@ def request_otp(account) -> dict:
         err_msg = data.get("message") or data.get("error") or str(data)
         logger.error("Yêu cầu gửi OTP thất bại: %s", err_msg)
         raise SSIAuthError(f"Gửi OTP thất bại: {err_msg}")
+
+    tx_id = data.get("transactionId") or (data.get("data") or {}).get("transactionId")
+    if tx_id:
+        cache.set(f"ssi:tx_id:{account.ssi_consumer_id}", tx_id, timeout=300)
     return data
 
 
@@ -107,6 +130,8 @@ def get_access_token(account, otp: str = None, transaction_id: str = None) -> st
     }
     if otp:
         body["otp"] = str(otp).strip()
+    if not transaction_id:
+        transaction_id = cache.get(f"ssi:tx_id:{account.ssi_consumer_id}")
     if transaction_id:
         body["transactionId"] = str(transaction_id).strip()
 
@@ -122,18 +147,29 @@ def get_access_token(account, otp: str = None, transaction_id: str = None) -> st
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
     access_token = payload.get("accessToken")
     refresh_token = payload.get("refreshToken")
+    expires_at = payload.get("expiresAt")
 
     if not access_token:
         raise SSIAuthError(f"Phản hồi không chứa accessToken: {data}")
 
+    ttl = TOKEN_CACHE_TTL
+    if expires_at:
+        try:
+            diff = int(expires_at / 1000 - time.time())
+            if diff > 60:
+                ttl = diff
+        except Exception:
+            pass
+
     # Lưu vào Redis
     cid = account.ssi_consumer_id
-    cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
-    cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
+    cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=ttl)
+    cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=ttl)
     if refresh_token:
-        cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), refresh_token, timeout=TOKEN_CACHE_TTL * 7)
+        cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), refresh_token, timeout=ttl * 7)
 
-    logger.info("Đã lưu SSI AccessToken thành công cho apiKey %s", cid[:8])
+    cache.delete(f"ssi:tx_id:{cid}")
+    logger.info("Đã lưu SSI AccessToken thành công cho apiKey %s (TTL: %ss)", cid[:8], ttl)
     return access_token
 
 
@@ -142,6 +178,7 @@ def refresh_access_token(account) -> str:
     cid = account.ssi_consumer_id
     refresh_token = cache.get(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
     if not refresh_token:
+        clear_writer_token(account)
         raise SSIAuthError("Không có RefreshToken để làm mới phiên SSI")
 
     url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_REFRESH}"
@@ -151,6 +188,7 @@ def refresh_access_token(account) -> str:
     data = res.json()
     if res.status_code != 200:
         logger.warning("Refresh token SSI thất bại: %s", data)
+        clear_writer_token(account)
         raise SSIAuthError("Phiên SSI đã hết hạn, cần xác thực OTP mới")
 
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
@@ -251,7 +289,11 @@ def send_request(account, method: str, path: str, params: dict = None,
             # Nếu token hết hạn (401), thử refresh token và thử lại 1 lần
             if res.status_code == 401 and attempt < retries:
                 logger.warning("SSI 401 Unauthorized, thử làm mới token...")
-                token = refresh_access_token(account)
+                try:
+                    token = refresh_access_token(account)
+                except Exception as e:
+                    clear_writer_token(account)
+                    raise SSIAuthError(f"Phiên SSI đã hết hạn, cần xác thực OTP mới: {e}")
                 headers["Authorization"] = f"Bearer {token}"
                 if need_signature:
                     sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)

@@ -77,36 +77,99 @@ class AuthencationStockExchagesView(APIView):
             ConfigurationOverviewServices.restart_request_trade_overview(user) # Reset is_trading và mua/bán tay
             user.scheduler_status = False
             user.save()
-        elif vps_account.broker == 'ssi':
-            # SSI FastConnect: không có session web, xác thực bằng PIN/OTP để lấy writer token
-            from common.api.ssi import client as ssi_client
-            try:
-                # Nếu đã có token hợp lệ trong cache thì tái sử dụng mà không cần bắt nhập lại OTP
-                token = None
-                if not otp:
-                    try:
-                        token = ssi_client.ensure_token(vps_account)
-                    except Exception:
-                        pass
-                if not token:
-                    if vps_account.ssi_two_fa_type == 1 and not otp:
-                        ssi_client.request_otp(vps_account)
-                        return Response({"data": {"message": "Đã gửi OTP SSI, vui lòng nhập OTP!", "status": 0}}, status=HTTP_400_BAD_REQUEST)
-                    ssi_client.verify_code(vps_account, otp or None)
-            except Exception as e:
-                logger.error("Xác thực SSI thất bại: %s", e)
-                return Response({"data": {"message": f"Xác thực SSI thất bại: {e}", "status": 0}}, status=HTTP_400_BAD_REQUEST)
+            return Response({"data": result}, status=HTTP_200_OK)
 
-            session_id = 'ssi'
-            is_valid_session, _ = validate_session(account_name, account_num, url, session_id, '')
-            if not is_valid_session:
-                return Response({"data": {"message": "Session chưa hợp lệ!", "status": 0}}, status=HTTP_400_BAD_REQUEST)
-            if session_id != session_id_old:
-                ConfigurationOverviewServices.restart_request_trade_overview(user)  # Reset is_trading và mua/bán tay
-            result = update_vps_data(session_id, "Session hợp lệ!", 1)
-            create_user_schedules(user)
-            user.scheduler_status = True
-            user.save()
+        from common.api.broker import _is_ssi
+        is_ssi = (
+            getattr(vps_account, 'broker', '').lower() == 'ssi'
+            or _is_ssi(account_name, account_num)
+        )
+
+        if is_ssi:
+            # SSI FastConnect v3: Xác thực bằng mã SmartOTP / SMS OTP
+            from common.api.ssi import client as ssi_client
+
+            # TRƯỜNG HỢP 1: Người dùng đã nhập mã OTP từ giao diện frontend
+            if otp:
+                otp_code = str(otp).strip()
+                try:
+                    # Xóa token cũ trong cache để lấy token mới hoàn toàn
+                    ssi_client.clear_writer_token(vps_account)
+                    token = ssi_client.get_access_token(vps_account, otp=otp_code)
+                    logger.info("Xác thực OTP SSI thành công từ frontend cho tài khoản %s", account_num)
+                except Exception as e:
+                    logger.error("Xác thực OTP SSI thất bại: %s", e)
+                    return Response({
+                        "data": {
+                            "message": f"Mã OTP không đúng hoặc đã hết hạn: {e}",
+                            "status": 0,
+                            "require_otp": True
+                        }
+                    }, status=HTTP_400_BAD_REQUEST)
+
+                # Kiểm tra số dư / session sau khi đã có token mới
+                session_id = 'ssi'
+                is_valid_session, session_info = validate_session(account_name, account_num, url, session_id, '')
+                if not is_valid_session:
+                    return Response({
+                        "data": {
+                            "message": "Không thể kết nối phiên SSI. Vui lòng thử lại!",
+                            "status": 0,
+                            "require_otp": True
+                        }
+                    }, status=HTTP_400_BAD_REQUEST)
+
+                if session_id != session_id_old:
+                    ConfigurationOverviewServices.restart_request_trade_overview(user)  # Reset is_trading và mua/bán tay
+
+                result = update_vps_data(session_id, "Session hợp lệ!", 1)
+                create_user_schedules(user)
+                user.scheduler_status = True
+                user.save()
+                return Response({"data": result}, status=HTTP_200_OK)
+
+            # TRƯỜNG HỢP 2: Người dùng chưa nhập OTP (mới click kết nối hoặc kiểm tra session)
+            else:
+                # Kiểm tra xem phiên hiện tại có còn hoạt động thực tế trên SSI không
+                is_alive = False
+                try:
+                    test_token = ssi_client.cache.get(ssi_client.ACCESS_TOKEN_CACHE_KEY.format(consumer_id=vps_account.ssi_consumer_id))
+                    if test_token:
+                        is_alive, _ = validate_session(account_name, account_num, url, 'ssi', '')
+                except Exception:
+                    is_alive = False
+
+                if is_alive:
+                    session_id = 'ssi'
+                    result = update_vps_data(session_id, "Session hợp lệ!", 1)
+                    create_user_schedules(user)
+                    user.scheduler_status = True
+                    user.save()
+                    return Response({"data": result}, status=HTTP_200_OK)
+
+                # Phiên đã hết hạn hoặc chưa đăng nhập: Xóa sạch token cũ
+                ssi_client.clear_writer_token(vps_account)
+
+                # Gửi yêu cầu OTP tới SSI (nếu là tài khoản 2FA SMS hoặc push notification iBoard)
+                otp_sent = False
+                try:
+                    ssi_client.request_otp(vps_account)
+                    otp_sent = True
+                except Exception as e:
+                    logger.warning("request_otp SSI: %s", e)
+
+                msg = (
+                    "Đã gửi yêu cầu OTP tới SSI, vui lòng nhập mã OTP để tiếp tục!"
+                    if otp_sent
+                    else "Phiên SSI đã hết hạn. Vui lòng nhập mã SmartOTP từ app SSI iBoard!"
+                )
+                return Response({
+                    "data": {
+                        "message": msg,
+                        "status": 0,
+                        "require_otp": True
+                    }
+                }, status=HTTP_400_BAD_REQUEST)
         else:
             # Đăng nhập để lấy session mới
             try:
