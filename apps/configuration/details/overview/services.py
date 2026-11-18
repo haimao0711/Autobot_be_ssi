@@ -47,18 +47,50 @@ class ConfigurationOverviewServices:
 
         except Configuration.DoesNotExist:
             return {}
+    @staticmethod
+    def invalidate_user_config_cache(user_id):
+        """Xóa cache danh sách cấu hình của user khi có thay đổi."""
+        try:
+            from common.api.ssi.client import cache as ssi_cache
+            ssi_cache.delete(f"cache:config_stock:{user_id}")
+        except Exception:
+            pass
+
     def get_detail_stock_configurations(user):
-        # print('Bat dau hàm get_detail_stock_configurations')
+        from common.api.ssi.client import cache as ssi_cache
+        cache_key = f"cache:config_stock:{user.id}"
+        cached_result = ssi_cache.get(cache_key)
+        if cached_result:
+            try:
+                return json.loads(cached_result)
+            except Exception:
+                pass
+
         overview = ConfigurationTypeServices.get_overview()
         try:
             configurations = Configuration.objects.filter(
                 user=user, config_type=overview.id
             ).select_related( 'stock', 'config_type' )
             stock_ids = [config.stock.id for config in configurations]
-            # Lấy dữ liệu hàng loạt
-            query_data_m1_all = StockService.get_last_stock_chart_items_by_time_bulk(
-                StockModel=StockM1, stock_ids=stock_ids
-            )
+
+            # Cache giá nến M1 mới nhất trong 10 giây để tránh scan toàn bộ bảng StockM1
+            cache_key_m1 = "cache:m1_latest_prices"
+            query_data_m1_all = None
+            cached_m1 = ssi_cache.get(cache_key_m1)
+            if cached_m1:
+                try:
+                    query_data_m1_all = json.loads(cached_m1)
+                except Exception:
+                    query_data_m1_all = None
+            if not query_data_m1_all:
+                query_data_m1_all = StockService.get_last_stock_chart_items_by_time_bulk(
+                    StockModel=StockM1, stock_ids=stock_ids
+                )
+                try:
+                    ssi_cache.set(cache_key_m1, json.dumps(query_data_m1_all), timeout=10)
+                except Exception:
+                    pass
+
             query_data_m1_map = {item['id']: item for item in query_data_m1_all}
 
             following_type = ConfigurationTypeServices.get_following()
@@ -94,10 +126,8 @@ class ConfigurationOverviewServices:
                 following_chart_sell = following_cfg.candle_sell.candle_sell if following_cfg and following_cfg.candle_sell else ''
 
                 # Xong thêm phản hồi chart
-                
                 low_price = query_data_m1['low'] if query_data_m1 else 0
                 high_price = query_data_m1['high'] if query_data_m1 else 0
-                # current_price = get_price(stock_name)
                 average_price = (float(low_price) + float(high_price)) / 2
                 current_price = query_data_m1['close'] if query_data_m1 else 0
 
@@ -119,41 +149,54 @@ class ConfigurationOverviewServices:
             account_num = getattr(vps_account, 'account_num', '')
 
             if vps_account:
-                if getattr(vps_account, 'broker', 'smartone') == 'ssi':
-                    from common.api.ssi import client as ssi_client
-                    from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
+                # Cache vị thế danh mục tài khoản trong Redis 15 giây để không gửi HTTP tới SSI mỗi 10s
+                cache_key_pos = f"cache:position:{getattr(vps_account, 'broker', 'smartone')}:{account_num}"
+                cached_pos = ssi_cache.get(cache_key_pos)
+                if cached_pos:
                     try:
-                        res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
-                        data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
-                        equity = []
-                        if isinstance(data, dict):
-                            equity = data.get('equity') or data.get('positions') or []
-                        elif isinstance(data, list):
-                            equity = data
-                        stock_balance_data = [
-                            {
-                                'symbol': p.get('symbol'),
-                                'actual_vol': p.get('quantity', 0),
-                                'avaiable_vol': p.get('sellableQuantity', 0),
-                                'avg_price': p.get('avgPrice', 0),
-                                'gain_loss_per': p.get('gainLossPercentage', 0),
-                            }
-                            for p in equity if isinstance(p, dict)
-                        ]
-                    except Exception as e:
-                        logger.error(f"SSI stock balance error in config: {e}")
-                else:
-                    session_id = vps_account.vps_session_id
-                    request_url = api.TRADING_URL
-                    try:
-                        from common.api.smartone.api import get_stock_balance
-                        data_res = get_stock_balance(account_name, account_num, request_url, session_id, '')
-                        if data_res and hasattr(data_res, 'text'):
-                            stock_balance_object = json.loads(data_res.text)
-                            stock_balance_data = stock_balance_object.get('data', []) or []
-                    except Exception as e:
-                        logger.error(f"SmartOne stock balance error in config: {e}")
-            # Xử lý đồng thời với ThreadPoolExecutor
+                        stock_balance_data = json.loads(cached_pos)
+                    except Exception:
+                        stock_balance_data = []
+
+                if not stock_balance_data:
+                    if getattr(vps_account, 'broker', 'smartone') == 'ssi':
+                        from common.api.ssi import client as ssi_client
+                        from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
+                        try:
+                            res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
+                            data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
+                            equity = []
+                            if isinstance(data, dict):
+                                equity = data.get('equity') or data.get('positions') or []
+                            elif isinstance(data, list):
+                                equity = data
+                            stock_balance_data = [
+                                {
+                                    'symbol': p.get('symbol'),
+                                    'actual_vol': p.get('quantity', 0),
+                                    'avaiable_vol': p.get('sellableQuantity', 0),
+                                    'avg_price': p.get('avgPrice', 0),
+                                    'gain_loss_per': p.get('gainLossPercentage', 0),
+                                }
+                                for p in equity if isinstance(p, dict)
+                            ]
+                            ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
+                        except Exception as e:
+                            logger.error(f"SSI stock balance error in config: {e}")
+                    else:
+                        session_id = vps_account.vps_session_id
+                        request_url = api.TRADING_URL
+                        try:
+                            from common.api.smartone.api import get_stock_balance
+                            data_res = get_stock_balance(account_name, account_num, request_url, session_id, '')
+                            if data_res and hasattr(data_res, 'text'):
+                                stock_balance_object = json.loads(data_res.text)
+                                stock_balance_data = stock_balance_object.get('data', []) or []
+                                ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
+                        except Exception as e:
+                            logger.error(f"SmartOne stock balance error in config: {e}")
+
+            # Xử lý đồng thời
             def process_configuration(configuration):
                 stock_name = configuration.stock.name
                 current_price = stock_data[stock_name]['close']
@@ -161,7 +204,6 @@ class ConfigurationOverviewServices:
                 following_chart_sell = stock_data[stock_name]['following_chart_sell']
                 trading_chart_buy = stock_data[stock_name]['trading_chart_buy']
                 trading_chart_sell = stock_data[stock_name]['trading_chart_sell']
-                # trading_data = trading_data_map.get(configuration.id, {})
                 balance_by_stock = next((stock for stock in stock_balance_data if stock.get('symbol') == stock_name), None)
                 return {
                     'account_vps': account_name,
@@ -193,9 +235,16 @@ class ConfigurationOverviewServices:
                     'trading_chart_sell' : trading_chart_sell,
                 }
 
-            with ThreadPoolExecutor() as executor:
-                futures = [executor.submit(process_configuration, config) for config in configurations]
-                data = [future.result() for future in futures]
+            # List comprehension thuần Python cực nhanh (<1ms) thay vì ThreadPoolExecutor
+            data = [process_configuration(config) for config in configurations]
+
+            # Cache toàn bộ kết quả cho user trong 8 giây (phù hợp chu kỳ polling 10s)
+            try:
+                ssi_cache.set(cache_key, json.dumps(data), timeout=8)
+            except Exception:
+                pass
+
+            return data
             # sorted_data = sorted(data, key=lambda x: int(x["volume_buy"]), reverse=True)
             # print('Kết thúc hàm get_detail_stock_configurations')
             return data
@@ -273,6 +322,7 @@ class ConfigurationOverviewServices:
                     
                 return_data.append(init_data)
         
+        ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
         return SuccessType.CREATE_SUCCESS, return_data
 
 
@@ -308,6 +358,7 @@ class ConfigurationOverviewServices:
                 return_data['stock_id'] = update_overview_data.get('stock_id')
                 # return_data['account'] = update_overview_data.get(
                 #     'account_id')
+                ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
                 return SuccessType.UPDATED_SUCCESS, return_data
             else:
                 print("Serializer errors:", overview_serializer.errors)
@@ -338,6 +389,7 @@ class ConfigurationOverviewServices:
                 overviews.update(is_block_buy=is_block_buy)
             elif type_block == 'S':
                 overviews.update(is_block_sell=is_block_sell)
+            ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
             return overviews  # Trả về danh sách các bản ghi đã được cập nhật
 
         return {}  # Không có bản ghi nào để cập nhật
@@ -352,6 +404,7 @@ class ConfigurationOverviewServices:
             overviews.update(is_buy_hand=False, is_sell_hand=False)
         if tradings.exists():
             tradings.update(is_trading=False)
+        ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
         return {}  # Không có bản ghi nào để cập nhật
 
     def restart_single_stock_trade_status(user, stock_symbol):
@@ -364,6 +417,7 @@ class ConfigurationOverviewServices:
             
             Configuration.objects.filter(user=user, stock=stock, config_type=overview_type.id).update(is_buy_hand=False, is_sell_hand=False)
             Configuration.objects.filter(user=user, stock=stock, config_type=trading_type.id).update(is_trading=False)
+            ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
             return True
         except Exception as e:
             print(f"Error resetting status for {stock_symbol}: {e}")
@@ -432,6 +486,7 @@ class ConfigurationOverviewServices:
         else:
             overview_configuration.delete()
 
+        ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
         return SuccessType.DELETE_SUCCESS, {}
 
     def check_is_overview_exist(user, stock_id):
