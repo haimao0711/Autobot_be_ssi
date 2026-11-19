@@ -122,6 +122,7 @@
     }
     ```
   - Trang tài liệu không nêu đơn vị của `price` (đồng hay nghìn đồng).
+  - **ĐÃ XÁC MINH THỰC TẾ (diagnose_order, 19/11/2026):** `X-Signature` = **hex** của chữ ký RSA-SHA256 (PKCS#1 v1.5) trên **chỉ JSON body** (KHÔNG nối SecretKey, KHÔNG base64, KHÔNG tiền tố `sha256=`). Các kiểu khác bị `401006 Chữ ký token không hợp lệ` hoặc `401013 Thông tin ký dữ liệu không hợp lệ`. Cài đặt: `signature.sign_payload_hex`.
 
 ### 2.3. Sửa lệnh (`PUT /api/v3/trading/order`)
 - **Server URL:** `https://api.ssi.com.vn`

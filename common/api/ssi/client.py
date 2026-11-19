@@ -21,7 +21,7 @@ from common.api.ssi.constants import (
     TOKEN_CACHE_TTL,
     WRITER_TOKEN_CACHE_KEY,
 )
-from common.api.ssi.signature import sign_payload
+from common.api.ssi.signature import sign_payload_hex
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ def send_request(account, method: str, path: str, params: dict = None,
         logger.info("SSI API %s %s Payload: %s", method, path, payload_str)
 
     if need_signature:
-        sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
+        sig = sign_payload_hex(payload_str, account.ssi_private_key_path)
         headers["X-Signature"] = sig
 
     for attempt in range(retries + 1):
@@ -293,7 +293,7 @@ def send_request(account, method: str, path: str, params: dict = None,
                         raise SSIAuthError(f"Phiên SSI đã hết hạn, cần xác thực OTP mới: {e}")
                     headers["Authorization"] = f"Bearer {token}"
                     if need_signature:
-                        sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
+                        sig = sign_payload_hex(payload_str, account.ssi_private_key_path)
                         headers["X-Signature"] = sig
                     continue
                 else:

@@ -63,6 +63,16 @@ def load_rsa_key(key_input: str) -> RSA.RsaKey:
         raise ValueError(f"Định dạng RSA private key không hợp lệ: {err}") from err
 
 
+def sign_payload_hex(payload_str: str, key_input) -> str:
+    """X-Signature thực tế SSI chấp nhận (đã xác minh bằng diagnose_order, biến thể G):
+
+    HEX( RSA-SHA256-PKCS1v15( JSON body ) ) — KHÔNG nối SecretKey, KHÔNG base64, KHÔNG tiền tố 'sha256='.
+    """
+    rsa_key = key_input if isinstance(key_input, RSA.RsaKey) else load_rsa_key(key_input)
+    hash_obj = SHA256.new((payload_str or "").encode("utf-8"))
+    return pkcs1_15.new(rsa_key).sign(hash_obj).hex()
+
+
 def sign_payload(secret_key: str, payload_str: str, key_input: str or RSA.RsaKey) -> str:
     """Tạo chữ ký X-Signature bằng RSA-SHA256 trên chuỗi (secret_key + payload_str).
 
