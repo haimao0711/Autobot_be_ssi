@@ -23,7 +23,7 @@ PRICE_UNIT = 1000
 
 MARKET_VN = "VN"
 ORDER_TYPE_LIMIT = "LO"
-CHANNEL_ID = "TA"
+CHANNEL_ID = "SSI FastConnect v3"
 
 # Mã lệnh mua/bán
 SIDE_BUY = "B"

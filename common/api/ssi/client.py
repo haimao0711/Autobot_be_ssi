@@ -265,6 +265,7 @@ def send_request(account, method: str, path: str, params: dict = None,
     payload_str = ""
     if json_body is not None:
         payload_str = json.dumps(json_body, separators=(",", ":"), ensure_ascii=False)
+        logger.info("SSI API %s %s Payload: %s", method, path, payload_str)
 
     if need_signature:
         sig = sign_payload(account.ssi_consumer_secret, payload_str, account.ssi_private_key_path)
@@ -310,6 +311,9 @@ def send_request(account, method: str, path: str, params: dict = None,
                 if res.status_code in (401, 403):
                     clear_writer_token(account)
                     raise SSIAuthError(f"Phiên SSI đã hết hạn hoặc không có quyền: {data}")
+                if isinstance(data, dict):
+                    data.setdefault("status", res.status_code)
+                    data.setdefault("error", data.get("msg") or data.get("message") or f"HTTP {res.status_code}")
                 return data
 
             return data

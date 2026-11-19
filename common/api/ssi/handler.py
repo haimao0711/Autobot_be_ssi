@@ -64,8 +64,18 @@ def _as_list(data):
 def _ok(res) -> bool:
     if not isinstance(res, dict):
         return False
+    if res.get("error") or res.get("errors"):
+        return False
+    code = res.get("code")
+    if code is not None and code not in (200, "200", 0, "0", "SUCCESS", "success"):
+        return False
     status = res.get("status")
-    return status in (200, "200", "SUCCESS", "success", None) and not res.get("error")
+    if status is not None and status not in (200, "200", 0, "0", "SUCCESS", "success"):
+        return False
+    msg = str(res.get("msg") or res.get("message") or "").lower()
+    if any(k in msg for k in ("lỗi", "error", "fail", "không hợp lệ", "sai định dạng", "từ chối", "hết hạn")):
+        return False
+    return True
 
 
 def _tick(price_vnd: float) -> int:
@@ -100,7 +110,9 @@ def _from_vnd(price_vnd) -> float:
 
 def _request_id(ref_id: str = None) -> str:
     if ref_id:
-        return str(ref_id)
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', str(ref_id))
+        return sanitized[:32]
     return f"{time.time_ns() // 1000}{random.randint(0, 99):02d}"
 
 
@@ -157,10 +169,10 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
         body = {
             "accountNo": account.account_num,
             "symbol": str(symbol).upper(),
-            "side": side,
+            "buySell": side,
             "orderType": ORDER_TYPE_LIMIT,
             "quantity": int(volume),
-            "price": str(price_vnd),
+            "price": int(price_vnd),
             "deviceId": ssi_client.get_device_id(),
             "clientRequestId": client_req_id,
             "isReturnOrderId": True,
@@ -180,16 +192,18 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
         logger.error("SSI đặt lệnh ngoại lệ %s: %s", symbol, e)
         return {"error": str(e), "rc": 500}
 
-    status_code = res.get("status")
-    if status_code not in (200, "200", None) or res.get("error"):
-        err_msg = res.get("message") or res.get("error") or "Lỗi đặt lệnh SSI"
+    if not _ok(res):
+        status_code = res.get("status") or res.get("code") or 400
+        err_msg = res.get("msg") or res.get("message") or res.get("error") or "Lỗi đặt lệnh SSI"
         logger.error("SSI đặt lệnh thất bại %s: %s", symbol, res)
-        return {"error": err_msg, "rc": status_code or 400}
+        return {"error": err_msg, "rc": status_code}
 
     data = res.get("data") or res.get("result") or {}
     order_num = _first(data if isinstance(data, dict) else {}, "orderId", "orderNo", "uniqueID")
     if not order_num:
-        order_num = client_req_id
+        err_msg = res.get("msg") or res.get("message") or res.get("error") or "Không nhận được Order ID từ SSI"
+        logger.error("SSI đặt lệnh %s không trả về orderId hợp lệ: %s", symbol, res)
+        return {"error": err_msg, "rc": 400}
 
     return {
         "symbol": symbol,
@@ -228,7 +242,7 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
         body = {
             "accountNo": account.account_num,
             "orderId": str(order_num),
-            "price": str(_to_vnd(update_price)),
+            "price": int(_to_vnd(update_price)),
             "quantity": int(update_volume),
             "deviceId": ssi_client.get_device_id(),
         }
@@ -242,11 +256,12 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
         )
     except Exception as e:
         logger.error("SSI sửa lệnh lỗi: %s", e)
-        return []
+        return {"error": str(e), "rc": 500}
 
     if not _ok(res):
         logger.error("SSI sửa lệnh thất bại: %s", res)
-        return []
+        err_msg = res.get("msg") or res.get("message") or res.get("error") or "Sửa lệnh thất bại"
+        return {"error": err_msg, "rc": res.get("status") or res.get("code") or 400}
 
     return {
         "orderNo": str(order_num),
