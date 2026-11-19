@@ -118,11 +118,11 @@ def _from_vnd(price_vnd) -> float:
 
 
 def _request_id(ref_id: str = None) -> str:
-    if ref_id:
-        import re
-        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', str(ref_id))
-        return sanitized[:32]
-    return f"{time.time_ns() // 1000}{random.randint(0, 99):02d}"
+    """Sinh clientRequestId ngắn, chỉ gồm chữ số (16 ký tự) để tránh vi phạm giới hạn độ dài/định dạng của SSI.
+
+    ref_id nội bộ (vd '059191.I.test.1795...') dài 27+ ký tự nên KHÔNG dùng trực tiếp.
+    """
+    return f"{int(time.time() * 1000)}{random.randint(0, 999):03d}"
 
 
 def _account(user_account, trade_account):
