@@ -81,3 +81,40 @@ def run(user_id, symbol="ZZZZ"):
             except Exception as e:
                 print(f"[{name}] LỖI: {e}")
             time.sleep(0.5)
+
+
+def check_signature(user_id, symbol="ZZZZ"):
+    """Kiểm tra nhanh chữ ký theo đúng luồng production (client.send_request).
+
+    Dùng mã giả nên KHÔNG đặt lệnh thật. Nếu chữ ký ĐÚNG: lỗi trả về là lỗi nghiệp vụ
+    (vd 500 'Cannot determine stock price'), KHÔNG phải 401006/401013.
+
+    Chạy:
+      docker exec -it <container-api> python manage.py shell -c "from common.api.ssi.diagnose_order import check_signature; check_signature(3)"
+    """
+    from apps.authencation.user.models import User
+    from apps.account.detail.services import AccountService
+
+    user = User.objects.get(id=user_id)
+    account = AccountService.get_account_by_user(user)
+    body = {
+        "accountNo": account.account_num,
+        "symbol": symbol,
+        "side": "B",
+        "orderType": "LO",
+        "quantity": 100,
+        "price": "26.20",
+        "deviceId": ssi_client.get_device_id(),
+        "clientRequestId": str(int(time.time() * 1000)),
+        "isReturnOrderId": True,
+    }
+    res = ssi_client.send_request(
+        account, method="POST", path=ENDPOINT_TRADING_ORDER,
+        json_body=body, need_signature=True,
+    )
+    code = res.get("code") if isinstance(res, dict) else None
+    print("Phản hồi:", res)
+    if code in (401006, 401013):
+        print(">>> CHỮ KÝ CHƯA ĐÚNG")
+    else:
+        print(">>> CHỮ KÝ ĐÃ ĐƯỢC SSI CHẤP NHẬN (lỗi còn lại, nếu có, là nghiệp vụ do dùng mã giả)")
