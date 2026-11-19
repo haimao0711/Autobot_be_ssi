@@ -93,9 +93,9 @@ class SSIHandlerTest(TestCase):
         self.assertEqual(res["price"], 21.5)
         self.assertEqual(res["volume"], 100)
 
-        # Kiểm tra body gửi đi đổi giá 21.5 thành 21500 (number) và buySell="B"
+        # Kiểm tra body gửi đi đổi giá 21.5 thành "21500" (string) và buySell="B"
         call_kwargs = mock_send.call_args[1]
-        self.assertEqual(call_kwargs["json_body"]["price"], 21500)
+        self.assertEqual(call_kwargs["json_body"]["price"], "21500")
         self.assertEqual(call_kwargs["json_body"]["buySell"], "B")
         self.assertEqual(call_kwargs["json_body"]["quantity"], 100)
 

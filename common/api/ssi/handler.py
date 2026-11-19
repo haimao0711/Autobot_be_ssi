@@ -185,7 +185,7 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
             "buySell": side,
             "orderType": ORDER_TYPE_LIMIT,
             "quantity": int(volume),
-            "price": int(price_vnd),
+            "price": str(price_vnd),
             "deviceId": ssi_client.get_device_id(),
             "clientRequestId": client_req_id,
             "isReturnOrderId": True,
@@ -255,7 +255,7 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
         body = {
             "accountNo": account.account_num,
             "orderId": str(order_num),
-            "price": int(_to_vnd(update_price)),
+            "price": str(_to_vnd(update_price)),
             "quantity": int(update_volume),
             "deviceId": ssi_client.get_device_id(),
         }
