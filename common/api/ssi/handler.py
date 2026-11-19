@@ -21,6 +21,7 @@ from common.api.ssi.constants import (
     FINAL_ORDER_STATUSES,
     ORDER_TYPE_LIMIT,
     PRICE_UNIT,
+    SSI_ORDER_PRICE_IN_THOUSAND,
     SIDE_BUY,
     UNKNOWN_CEIL_PRICE,
     UNKNOWN_FLOOR_PRICE,
@@ -98,6 +99,14 @@ def _to_vnd(price_k: float) -> int:
     if p > 1000:
         return _tick(p)
     return _tick(p * PRICE_UNIT)
+
+
+def _price_str(price_k) -> str:
+    """Chuỗi giá gửi SSI khi đặt/sửa lệnh (theo SSI_ORDER_PRICE_IN_THOUSAND)."""
+    vnd = _to_vnd(price_k)
+    if SSI_ORDER_PRICE_IN_THOUSAND:
+        return f"{vnd / PRICE_UNIT:.2f}"
+    return str(vnd)
 
 
 def _from_vnd(price_vnd) -> float:
@@ -185,7 +194,7 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
             "side": side,
             "orderType": ORDER_TYPE_LIMIT,
             "quantity": int(volume),
-            "price": str(price_vnd),
+            "price": _price_str(price),
             "deviceId": ssi_client.get_device_id(),
             "clientRequestId": client_req_id,
             "isReturnOrderId": True,
@@ -258,7 +267,7 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
         body = {
             "accountNo": account.account_num,
             "orderId": str(order_num),
-            "price": str(_to_vnd(update_price)),
+            "price": _price_str(update_price),
             "quantity": int(update_volume),
             "deviceId": ssi_client.get_device_id(),
         }

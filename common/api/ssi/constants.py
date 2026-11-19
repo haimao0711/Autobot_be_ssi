@@ -21,6 +21,11 @@ ENDPOINT_TRADING_MAX_BUY_SELL = "/api/v3/trading/maxBuySell"
 # còn SSI dùng đơn vị đồng (vd 21500). Chuyển đổi tại biên của lớp SSI.
 PRICE_UNIT = 1000
 
+# Định dạng chuỗi giá gửi lên SSI khi đặt/sửa lệnh:
+#   True  -> nghìn đồng, vd "26.20" (khớp ví dụ WebSocket trong tài liệu SSI: "45.50")
+#   False -> đồng, vd "26200"
+SSI_ORDER_PRICE_IN_THOUSAND = True
+
 MARKET_VN = "VN"
 ORDER_TYPE_LIMIT = "LO"
 CHANNEL_ID = "SSI FastConnect v3"
