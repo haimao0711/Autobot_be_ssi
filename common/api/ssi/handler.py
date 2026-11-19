@@ -150,11 +150,24 @@ def _get_order_book(account, start_date=None, end_date=None) -> list:
         logger.error("SSI get_order_book lỗi: %s", e)
         return []
 
-    data = res.get("data") if isinstance(res.get("data"), (dict, list)) else res.get("result")
-    if isinstance(data, dict):
-        orders = data.get("orders") or data.get("data")
-        return _as_list(orders)
-    return _as_list(data)
+    if not isinstance(res, (dict, list)):
+        return []
+
+    orders = None
+    for container in (res, res.get("data") if isinstance(res, dict) else None, res.get("result") if isinstance(res, dict) else None):
+        if isinstance(container, list):
+            orders = container
+            break
+        elif isinstance(container, dict):
+            for k in ("orders", "orderList", "orderBook", "data"):
+                val = container.get(k)
+                if isinstance(val, list):
+                    orders = val
+                    break
+            if orders is not None:
+                break
+
+    return _as_list(orders if orders is not None else res)
 
 
 # ------------------------------------------------------------------ orders
@@ -256,15 +269,16 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
         )
     except Exception as e:
         logger.error("SSI sửa lệnh lỗi: %s", e)
-        return {"error": str(e), "rc": 500}
+        return None
 
     if not _ok(res):
         logger.error("SSI sửa lệnh thất bại: %s", res)
-        err_msg = res.get("msg") or res.get("message") or res.get("error") or "Sửa lệnh thất bại"
-        return {"error": err_msg, "rc": res.get("status") or res.get("code") or 400}
+        return None
 
+    data = res.get("data") or res.get("result") or res
+    new_order_no = str(_first(data if isinstance(data, dict) else {}, "orderId", "orderNo", default=order_num))
     return {
-        "orderNo": str(order_num),
+        "orderNo": new_order_no,
         "status": StatusOrderEnum.UPDATE,
     }
 
@@ -290,13 +304,13 @@ def handle_cancel_order_service(user_account, url, session, asp_net_session, ord
         )
     except Exception as e:
         logger.error("SSI hủy lệnh ngoại lệ: %s", e)
-        return {}
+        return None
 
     if not _ok(res):
         logger.error("SSI hủy lệnh thất bại: %s", res)
-        return {}
+        return None
 
-    return res
+    return res or {"status": "success", "orderNo": str(order_num)}
 
 
 # ------------------------------------------------------------------ queries
@@ -311,6 +325,9 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
         return None
 
     not_matched = []
+    is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all", "calendar_cancel", "cancel_all_buy_orders", "cancel_all_sell_orders")
+    is_all_sides = not side or str(side).upper() == "ALL"
+
     for o in orders:
         order_status = str(_first(o, "orderStatus", "status", default="")).upper()
         if order_status in FINAL_ORDER_STATUSES:
@@ -320,7 +337,14 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
         o_symbol = str(_first(o, "symbol", "instrumentID", default="")).upper()
         o_qty = int(_num(_first(o, "quantity", default=0)))
         o_filled = int(_num(_first(o, "filledQuantity", "filledQty", default=0)))
-        remain_qty = o_qty - o_filled
+        o_cancel = int(_num(_first(o, "cancelQuantity", "cancelQty", default=0)))
+
+        os_qty = _first(o, "osQty", "remainQty", default=None)
+        if os_qty is not None:
+            remain_qty = int(_num(os_qty))
+        else:
+            remain_qty = o_qty - o_filled - o_cancel
+
         if remain_qty <= 0:
             continue
 
@@ -333,14 +357,11 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
             "status": "Chưa khớp",
         }
 
-        if side == "All":
+        symbol_match = is_all_symbols or (o_symbol == str(symbol).upper())
+        side_match = is_all_sides or (o_side == str(side).upper())
+
+        if symbol_match and side_match:
             not_matched.append(item)
-        elif symbol == "all_order":
-            if o_side == str(side).upper():
-                not_matched.append(item)
-        else:
-            if o_symbol == str(symbol).upper() and o_side == str(side).upper():
-                not_matched.append(item)
 
     return not_matched
 
@@ -356,6 +377,9 @@ def handle_orders_matched(user_account, trade_account, symbol, url, valid_sessio
         return []
 
     matched = []
+    is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all")
+    is_all_sides = not side or str(side).upper() == "ALL"
+
     for o in orders:
         o_side = str(_first(o, "side", "buySell", default="")).upper()
         o_symbol = str(_first(o, "symbol", "instrumentID", default="")).upper()
@@ -364,13 +388,15 @@ def handle_orders_matched(user_account, trade_account, symbol, url, valid_sessio
         if o_filled <= 0:
             continue
 
-        if (symbol == "all_order" or o_symbol == str(symbol).upper()) and \
-           (side == "All" or o_side == str(side).upper()):
+        symbol_match = is_all_symbols or (o_symbol == str(symbol).upper())
+        side_match = is_all_sides or (o_side == str(side).upper())
+
+        if symbol_match and side_match:
             matched.append({
                 "orderNo": str(_first(o, "orderId", "orderNo", "uniqueID")),
                 "side": o_side,
                 "symbol": o_symbol,
-                "showPrice": _from_vnd(_first(o, "price", "avgPrice", default=0)),
+                "showPrice": _from_vnd(_first(o, "avgPrice", "price", default=0)),
                 "volume": o_filled,
                 "orderTime": str(_first(o, "orderTime", "time", default="")),
                 "status": "Đã khớp",
@@ -493,6 +519,9 @@ def handle_cash_balance_service(user_account, trade_account, url, session, asp_n
         cash = _get_cash(account)
     except Exception as e:
         logger.error("SSI cash balance lỗi: %s", e)
+        return {}
+
+    if not cash:
         return {}
 
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
