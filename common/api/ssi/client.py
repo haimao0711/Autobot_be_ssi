@@ -241,8 +241,8 @@ def clear_writer_token(account):
 def get_device_id() -> str:
     """Sinh định danh deviceId duy nhất cho máy/container."""
     node = uuid.getnode()
-    mac = ":".join(f"{(node >> i) & 0xff:02x}" for i in range(0, 48, 8)[::-1])
-    return f"MAC-{mac.upper()}"
+    # Định dạng theo tài liệu SSI: "MAC-AABBCCDDEEFF" (không có dấu ':')
+    return f"MAC-{node:012X}"
 
 
 def send_request(account, method: str, path: str, params: dict = None,

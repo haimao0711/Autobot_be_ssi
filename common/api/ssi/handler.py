@@ -182,6 +182,7 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
         body = {
             "accountNo": account.account_num,
             "symbol": str(symbol).upper(),
+            "side": side,
             "buySell": side,
             "orderType": ORDER_TYPE_LIMIT,
             "quantity": int(volume),
