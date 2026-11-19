@@ -22,9 +22,9 @@ ENDPOINT_TRADING_MAX_BUY_SELL = "/api/v3/trading/maxBuySell"
 PRICE_UNIT = 1000
 
 # Định dạng chuỗi giá gửi lên SSI khi đặt/sửa lệnh:
-#   True  -> nghìn đồng, vd "26.20" (khớp ví dụ WebSocket trong tài liệu SSI: "45.50")
-#   False -> đồng, vd "26200"
-SSI_ORDER_PRICE_IN_THOUSAND = True
+#   True  -> nghìn đồng, vd "26.20" (SSI hiểu thành 26.2 đồng -> lỗi 'Price must be >= floor price')
+#   False -> đồng, vd "26200"  (ĐÃ CHỌN, sau khi test thực tế)
+SSI_ORDER_PRICE_IN_THOUSAND = False
 
 MARKET_VN = "VN"
 ORDER_TYPE_LIMIT = "LO"
