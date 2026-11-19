@@ -183,7 +183,6 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
             "accountNo": account.account_num,
             "symbol": str(symbol).upper(),
             "side": side,
-            "buySell": side,
             "orderType": ORDER_TYPE_LIMIT,
             "quantity": int(volume),
             "price": str(price_vnd),
@@ -213,7 +212,10 @@ def _place(user_account, trade_account, symbol, price, volume, ref_id, side):
         return {"error": err_msg, "rc": status_code}
 
     data = res.get("data") or res.get("result") or {}
-    order_num = _first(data if isinstance(data, dict) else {}, "orderId", "orderNo", "uniqueID")
+    if not isinstance(data, dict):
+        data = {}
+    # Response 200 của SSI v3 trả orderId ở root: {"clientRequestId","orderId","orderStatus",...}
+    order_num = _first(data, "orderId", "orderNo", "uniqueID") or _first(res, "orderId", "orderNo", "uniqueID")
     if not order_num:
         err_msg = res.get("msg") or res.get("message") or res.get("error") or "Không nhận được Order ID từ SSI"
         logger.error("SSI đặt lệnh %s không trả về orderId hợp lệ: %s", symbol, res)

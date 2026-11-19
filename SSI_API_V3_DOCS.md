@@ -97,7 +97,31 @@
     "isReturnOrderId": true
   }
   ```
-- **Lưu ý quan trọng về X-Signature:** Input để ký RSA SHA256 là chuỗi ghép: `SecretKey + JSON body`.
+- **Lưu ý quan trọng về X-Signature:** Input để ký RSA SHA256 là chuỗi ghép: `SecretKey + JSON body`. Ví dụ cURL trên trang tài liệu hiển thị `X-Signature: sha256=abc123...` (chỉ là placeholder, chưa rõ có tiền tố `sha256=` hay không).
+- **Mẫu trên trang hướng dẫn (đã đối chiếu):**
+  - Header: `Content-Type` (required), `User-Agent` (optional), `Accept-Language` (optional, mặc định `en`), `X-Signature` (required), `Authorization: Bearer <token>`.
+  - Tên trường chiều lệnh là **`side`** (`B`/`S`), KHÔNG phải `buySell`.
+  - `quantity`: number; `price`: **string** (bắt buộc khi `orderType = LO`); `deviceId`: string required (MAC address hoặc IMEI); `userAgent`, `ipAddress`, `clientRequestId`: optional; `isReturnOrderId`: boolean | null (tài khoản cơ sở mặc định `true`).
+  - Response Headers: `X-RATELIMIT-LIMIT`, `X-RATELIMIT-REMAINING`, `X-RATELIMIT-RESET`.
+  - cURL mẫu:
+    ```bash
+    curl -X POST "https://api.ssi.com.vn/api/v3/trading/order" \
+      -H "Content-Type: application/json" \
+      -H "X-Signature: sha256=abc123..." \
+      -H "Authorization: Bearer <token>" \
+      -d '{"accountNo":"string","symbol":"string","side":"B","orderType":"LO","quantity":0.1,"price":"string","deviceId":"string"}'
+    ```
+  - Response 200 (các trường nằm ở **root**, không bọc trong `data`):
+    ```json
+    {
+      "clientRequestId": "string",
+      "orderId": "string",
+      "orderStatus": "string",
+      "clientModifyId": "string",
+      "clientCancelId": "string"
+    }
+    ```
+  - Trang tài liệu không nêu đơn vị của `price` (đồng hay nghìn đồng).
 
 ### 2.3. Sửa lệnh (`PUT /api/v3/trading/order`)
 - **Server URL:** `https://api.ssi.com.vn`
