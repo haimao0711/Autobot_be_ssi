@@ -712,9 +712,13 @@ def _lookup_stock_prices(symbol: str) -> tuple:
                 last_m1 = StockService.get_last_stock_chart_item_by_time(StockM1, stock_obj.id)
                 if last_m1 and last_m1.get('close'):
                     current_price = _unit_vnd(last_m1['close'])
+            # Lấy giá đóng cửa phiên gần nhất làm giá tham chiếu đầu ngày (hoặc giá mở cửa)
             last_d1 = StockD1.objects.filter(stock=stock_obj).order_by('-time').first()
-            if last_d1 and last_d1.open:
-                ref_price = _unit_vnd(last_d1.open)
+            if last_d1:
+                if last_d1.close and last_d1.close > 0:
+                    ref_price = _unit_vnd(last_d1.close)
+                elif last_d1.open and last_d1.open > 0:
+                    ref_price = _unit_vnd(last_d1.open)
 
             from apps.configuration.details.models import Configuration
             from apps.configuration.type.services import ConfigurationTypeServices
@@ -724,6 +728,9 @@ def _lookup_stock_prices(symbol: str) -> tuple:
                 cost_price = _unit_vnd(cfg.price_to_buy_now)
     except Exception:
         pass
+
+    if ref_price <= 0 and cost_price > 0:
+        ref_price = cost_price
 
     return current_price, cost_price, ref_price
 
@@ -780,12 +787,14 @@ def _position_metrics(p: dict) -> dict:
 
     symbol = str(_first(p, "symbol", "instrumentID", "stock_name", default="")).strip().upper()
     cur_p, cost_p, ref_p = 0.0, 0.0, 0.0
-    if (price <= 0 or avg <= 0) and symbol:
+    if symbol:
         cur_p, cost_p, ref_p = _lookup_stock_prices(symbol)
         if price <= 0 and cur_p > 0:
             price = cur_p
         if avg <= 0 and cost_p > 0:
             avg = cost_p
+        if ref_p <= 0:
+            ref_p = avg if avg > 0 else price
 
     # Fallback khối lượng nếu sàn trả quantity=0 do đang chờ về (T+1/T+2) nhưng có giá vốn avg > 0
     if qty <= 0 and symbol and avg > 0:
@@ -817,10 +826,12 @@ def _position_metrics(p: dict) -> dict:
 
     gl1_raw = _first(p, "gainLossOneDay", "gainLossOneday", "gainLossToday", "dailyPnL",
                      "todayGainLoss", "oneDayGainLoss", "dayPnL", "dailyGainLoss", "todayPnL", default=None)
-    if gl1_raw is not None:
+    if gl1_raw is not None and _num(gl1_raw) != 0:
         gain_loss_oneday = _num(gl1_raw)
-    elif ref_p and price and qty:
+    elif ref_p > 0 and price > 0 and qty > 0 and abs(price - ref_p) > 0.001:
         gain_loss_oneday = (price - ref_p) * qty
+    elif avg > 0 and price > 0 and qty > 0 and abs(price - avg) > 0.001:
+        gain_loss_oneday = (price - avg) * qty
     else:
         gain_loss_oneday = 0.0
 
@@ -967,6 +978,10 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         wait_cost = _num(_first(cash, "buyT0", default=0)) + _num(_first(cash, "buyT1", default=0)) + _num(_first(cash, "buyT2", default=0))
         if wait_cost > 0:
             gain_loss_total = market_value - wait_cost
+
+    # Fallback lãi lỗ ngày nếu chưa có mà đã có lãi lỗ tổng
+    if not gain_loss_oneday_total and gain_loss_total:
+        gain_loss_oneday_total = gain_loss_total
 
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
