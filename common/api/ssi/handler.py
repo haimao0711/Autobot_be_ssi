@@ -765,10 +765,10 @@ def _position_metrics(p: dict) -> dict:
             "pendingQuantity", "pendingQty", "pending", "pendingReceive",
             "enroute", "enrouteQty", "tradeEnroute", "buyWaiting", "buyEnroute", default=0
         ))
-        t0 = _num(_first(p, "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
-        t1 = _num(_first(p, "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
-        t2 = _num(_first(p, "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
-        t3 = _num(_first(p, "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
+        t0 = _num(_first(p, "boughtQuantity", "buyingQuantity", "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
+        t1 = _num(_first(p, "t1BuyQuantity", "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
+        t2 = _num(_first(p, "t2BuyQuantity", "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
+        t3 = _num(_first(p, "t3BuyQuantity", "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
         t_sum = t0 + t1 + t2 + t3
         rec_total = receiving if receiving >= t_sum else t_sum
         qty = on_hand + rec_total
