@@ -3,6 +3,7 @@
 Các hàm giữ nguyên tên, tham số và định dạng trả về của SmartOne để `apps.trading`
 chuyển broker mà không cần sửa logic trading cốt lõi.
 """
+import json
 import logging
 import random
 import time
@@ -444,6 +445,17 @@ def handle_transaction_service(user_account, trade_account, url, valid_session,
     return transactions
 
 
+def _log_raw(tag: str, account, res, limit: int = 3000):
+    """Log nguyên văn phản hồi SSI (rút gọn) để đối chiếu tên trường khi chỉnh sửa."""
+    try:
+        text = json.dumps(res, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(res)
+    if len(text) > limit:
+        text = text[:limit] + f"...(cắt, tổng {len(text)} ký tự)"
+    logger.info("[SSI RAW][%s][%s] %s", tag, getattr(account, "account_num", "?"), text)
+
+
 def _get_cash(account) -> dict:
     """Lấy số dư tài khoản từ /api/v3/trading/accountBalance và ppmmrAccount."""
     params = {"accountNo": account.account_num}
@@ -453,6 +465,7 @@ def _get_cash(account) -> dict:
         path=ENDPOINT_TRADING_ACCOUNT_BALANCE,
         params=params,
     )
+    _log_raw("accountBalance", account, res)
     if not _ok(res):
         return None
 
@@ -483,6 +496,7 @@ def _get_cash(account) -> dict:
             path=ENDPOINT_TRADING_PPMMR,
             params=params,
         )
+        _log_raw("ppmmrAccount", account, res_pp)
         if _ok(res_pp) and isinstance(res_pp, dict):
             pp_equity = res_pp.get("equity")
             if not isinstance(pp_equity, dict) and isinstance(res_pp.get("data"), dict):
@@ -508,6 +522,7 @@ def _get_positions(account) -> list:
         path=ENDPOINT_TRADING_POSITION,
         params=params,
     )
+    _log_raw("position", account, res)
     if not isinstance(res, (dict, list)):
         return []
     if isinstance(res, list):
@@ -540,12 +555,14 @@ def handle_cash_balance_service(user_account, trade_account, url, session, asp_n
     account_balance = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
     purchasing_power = _num(_first(cash, "purchasingPower", "ee50", "withdrawable", default=withdrawable))
 
-    return {
+    result = {
         "symbol": "VND",
         "cash_balance": withdrawable,
         "total_assets": account_balance,
         "cash_available": purchasing_power,
     }
+    logger.info("[SSI PARSED][cash_balance][%s] %s", account.account_num, result)
+    return result
 
 
 def _unit_vnd(value) -> float:
@@ -687,6 +704,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
     if cash is None:
         return False, {}
 
+    positions = []
     try:
         positions = _get_positions(account) or []
         pm = [_position_metrics(p) for p in positions]
@@ -704,7 +722,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
     purchasing = _num(_first(cash, "purchasingPower", "ee50", "withdrawable", default=withdrawable))
 
-    return True, {
+    result = {
         "total_equity": int(account_bal + market_value),
         "cash_balance": int(withdrawable),
         "total_market_value": int(market_value),
@@ -712,3 +730,7 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         "gain_loss_value": int(gain_loss_total),
         "gain_loss_oneday_value": int(gain_loss_oneday_total),
     }
+    logger.info("[SSI PARSED][validate_session][%s] %s | vị thế: %s",
+                account.account_num, result,
+                [(_first(p, "symbol", "instrumentID"), _position_metrics(p)) for p in (positions if isinstance(positions, list) else [])])
+    return True, result
