@@ -773,6 +773,7 @@ def _position_metrics(p: dict) -> dict:
         rec_total = receiving if receiving >= t_sum else t_sum
         qty = on_hand + rec_total
 
+    # Fallback khối lượng từ sàn SSI nếu chưa có trong các trường trên
     if qty <= 0:
         qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
 
@@ -795,22 +796,6 @@ def _position_metrics(p: dict) -> dict:
             avg = cost_p
         if ref_p <= 0:
             ref_p = avg if avg > 0 else price
-
-    # Fallback khối lượng nếu sàn trả quantity=0 do đang chờ về (T+1/T+2) nhưng có giá vốn avg > 0
-    if qty <= 0 and symbol and avg > 0:
-        try:
-            from apps.configuration.details.models import Configuration
-            from apps.configuration.type.services import ConfigurationTypeServices
-            overview_type = ConfigurationTypeServices.get_overview()
-            cfg = Configuration.objects.filter(stock__name__iexact=symbol, config_type=overview_type.id).first()
-            if cfg and cfg.volume_to_buy and cfg.volume_to_buy > 0:
-                qty = cfg.volume_to_buy
-        except Exception:
-            pass
-
-    # Nếu sàn chưa trả sellable cho cổ phiếu đang chờ về, fallback theo qty để bot và UI hiển thị khối lượng quản lý
-    if sellable <= 0 and qty > 0:
-        sellable = qty
 
     mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
     market_value = _num(mv_raw) if mv_raw is not None else qty * price

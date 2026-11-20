@@ -229,18 +229,7 @@ class ConfigurationOverviewServices:
                 aver_price = balance_by_stock.get('avg_price', 0) if balance_by_stock else 0
                 profit = balance_by_stock.get('gain_loss_per', 0) if balance_by_stock else 0
 
-                # 1. Nếu vol_buy = 0 mà có aver_price > 0 (vị thế đang có trên sàn SSI):
-                # Fallback khối lượng từ configuration.volume_to_buy
-                if vol_buy <= 0 and aver_price > 0:
-                    vol_buy = int(configuration.volume_to_buy or 0)
-
-                # 2. Nếu vol_trade = 0 mà vol_buy > 0:
-                # Fallback vol_trade = vol_buy để frontend hiển thị đúng khối lượng cho phép quản lý / giao dịch
-                if vol_trade <= 0 and vol_buy > 0:
-                    vol_trade = vol_buy
-
-                # 3. Tính % lãi lỗ thực tế:
-                # Nếu profit = 0 mà có current_price và aver_price khác nhau:
+                # Tính % lãi lỗ thực tế từ giá thị trường và giá vốn nhận từ sàn
                 if (not profit or profit == 0) and aver_price > 0 and current_price > 0:
                     profit = round((current_price - aver_price) / aver_price * 100, 2)
 
@@ -304,9 +293,6 @@ class ConfigurationOverviewServices:
 
                 if (not profit_held or profit_held == 0) and avg_p_held > 0 and cur_p_held > 0:
                     profit_held = round((cur_p_held - avg_p_held) / avg_p_held * 100, 2)
-
-                if vol_trade_held <= 0 and vol_buy_held > 0:
-                    vol_trade_held = vol_buy_held
 
                 data.append({
                     'account_vps': account_name,
