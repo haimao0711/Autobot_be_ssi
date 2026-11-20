@@ -548,6 +548,56 @@ def handle_cash_balance_service(user_account, trade_account, url, session, asp_n
     }
 
 
+def _unit_vnd(value) -> float:
+    """Chuẩn hoá giá về đồng (SSI có thể trả đồng hoặc nghìn đồng)."""
+    p = _num(value)
+    if 0 < p < 1000:
+        return p * PRICE_UNIT
+    return p
+
+
+def _position_metrics(p: dict) -> dict:
+    """Tính các chỉ số của một vị thế (đồng), chịu được nhiều tên trường khác nhau của SSI.
+
+    Trả về: quantity, sellable, price, avg_price, market_value, gain_loss, gain_loss_oneday, gain_loss_pct.
+    """
+    qty = _num(_first(p, "quantity", "onHand", "balance", default=0))
+    sellable = _num(_first(p, "sellableQuantity", "sellableQty", "available", default=0))
+    price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
+                             "matchPrice", "price", default=0))
+    avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", default=0))
+
+    mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
+    market_value = _num(mv_raw) if mv_raw is not None else qty * price
+
+    gl_raw = _first(p, "gainLoss", "gainLossValue", "unrealizedPnL", "unrealizedPL",
+                    "profitLoss", "pnl", "value_loss", default=None)
+    if gl_raw is not None:
+        gain_loss = _num(gl_raw)
+    elif avg and price:
+        gain_loss = (price - avg) * qty
+    else:
+        gain_loss = 0.0
+
+    gl1_raw = _first(p, "gainLossOneDay", "gainLossOneday", "gainLossToday", "dailyPnL",
+                     "todayGainLoss", "oneDayGainLoss", default=None)
+    gain_loss_oneday = _num(gl1_raw) if gl1_raw is not None else 0.0
+
+    pct_raw = _first(p, "gainLossPercentage", "gainLossPercent", "percentage_loss", default=None)
+    if pct_raw is not None:
+        gain_pct = _num(pct_raw)
+    elif avg and price:
+        gain_pct = (price - avg) / avg * 100
+    else:
+        gain_pct = 0.0
+
+    return {
+        "quantity": qty, "sellable": sellable, "price": price, "avg_price": avg,
+        "market_value": market_value, "gain_loss": gain_loss,
+        "gain_loss_oneday": gain_loss_oneday, "gain_loss_pct": gain_pct,
+    }
+
+
 def handle_stock_balance_service(user_account, trade_account, symbol, url, session,
                                  asp_net_session, side):
     """Lấy thông tin danh mục cổ phiếu và số lượng khả dụng của mã symbol."""
@@ -558,11 +608,13 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
         logger.error("SSI stock balance lỗi: %s", e)
         return {}
 
+    metrics = {id(p): _position_metrics(p) for p in positions}
+
     def vol(p):
-        return _num(_first(p, "quantity", "onHand", "balance", default=0))
+        return metrics[id(p)]["quantity"]
 
     def avail(p):
-        return _num(_first(p, "sellableQuantity", "sellableQty", "available", default=0))
+        return metrics[id(p)]["sellable"]
 
     existing = [p for p in positions if vol(p) > 0]
     total_buy = sum(vol(p) for p in existing)
@@ -581,22 +633,18 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
     for p in positions:
         p_symbol = str(_first(p, "symbol", "instrumentID", default="")).upper()
         if p_symbol == symbol_upper:
-            avg = _num(_first(p, "avgPrice", default=0))
-            market = _num(_first(p, "marketPrice", default=0))
-            gain_pct = _num(_first(p, "gainLossPercentage", "percentage_loss", default=0))
-            gain_val = _num(_first(p, "gainLoss", "value_loss", default=0))
-
+            m = metrics[id(p)]
             stock_balance = {
                 "symbol": symbol,
                 "account": trade_account,
-                "avg_price": _from_vnd(avg),
+                "avg_price": _from_vnd(m["avg_price"]),
                 "ceil_price": UNKNOWN_CEIL_PRICE,
                 "floor_price": UNKNOWN_FLOOR_PRICE,
-                "actual_vol": vol(p),
-                "available_vol": avail(p),
-                "value": vol(p) * market if market else 0,
-                "percentage_loss": gain_pct,
-                "value_loss": gain_val,
+                "actual_vol": m["quantity"],
+                "available_vol": m["sellable"],
+                "value": m["market_value"],
+                "percentage_loss": m["gain_loss_pct"],
+                "value_loss": m["gain_loss"],
             }
             break
 
@@ -641,12 +689,16 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
 
     try:
         positions = _get_positions(account) or []
-        market_value = sum(
-            _num(_first(p, "quantity", default=0)) * _num(_first(p, "marketPrice", default=0))
-            for p in positions
-        )
-    except Exception:
-        market_value = 0
+        pm = [_position_metrics(p) for p in positions]
+        market_value = sum(m["market_value"] for m in pm)
+        gain_loss_total = sum(m["gain_loss"] for m in pm)
+        gain_loss_oneday_total = sum(m["gain_loss_oneday"] for m in pm)
+        if positions and not market_value:
+            logger.warning("SSI position không có giá thị trường, các khóa nhận được: %s",
+                           sorted(positions[0].keys()))
+    except Exception as e:
+        logger.warning("SSI validate: lỗi tính vị thế: %s", e)
+        market_value = gain_loss_total = gain_loss_oneday_total = 0
 
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
@@ -657,6 +709,6 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         "cash_balance": int(withdrawable),
         "total_market_value": int(market_value),
         "cash_available": int(purchasing),
-        "gain_loss_value": 0,
-        "gain_loss_oneday_value": 0,
+        "gain_loss_value": int(gain_loss_total),
+        "gain_loss_oneday_value": int(gain_loss_oneday_total),
     }
