@@ -223,6 +223,27 @@ class ConfigurationOverviewServices:
                 trading_chart_sell = stock_data[stock_name]['trading_chart_sell']
                 stock_name_clean = str(stock_name or '').strip().upper()
                 balance_by_stock = next((stock for stock in stock_balance_data if str(stock.get('symbol') or '').strip().upper() == stock_name_clean), None)
+
+                vol_buy = balance_by_stock.get('actual_vol', 0) if balance_by_stock else 0
+                vol_trade = balance_by_stock.get('avaiable_vol', 0) if balance_by_stock else 0
+                aver_price = balance_by_stock.get('avg_price', 0) if balance_by_stock else 0
+                profit = balance_by_stock.get('gain_loss_per', 0) if balance_by_stock else 0
+
+                # 1. Nếu vol_buy = 0 mà có aver_price > 0 (vị thế đang có trên sàn SSI):
+                # Fallback khối lượng từ configuration.volume_to_buy
+                if vol_buy <= 0 and aver_price > 0:
+                    vol_buy = int(configuration.volume_to_buy or 0)
+
+                # 2. Nếu vol_trade = 0 mà vol_buy > 0:
+                # Fallback vol_trade = vol_buy để frontend hiển thị đúng khối lượng cho phép quản lý / giao dịch
+                if vol_trade <= 0 and vol_buy > 0:
+                    vol_trade = vol_buy
+
+                # 3. Tính % lãi lỗ thực tế:
+                # Nếu profit = 0 mà có current_price và aver_price khác nhau:
+                if (not profit or profit == 0) and aver_price > 0 and current_price > 0:
+                    profit = round((current_price - aver_price) / aver_price * 100, 2)
+
                 return {
                     'account_vps': account_name,
                     'account_vps_num': account_num,
@@ -241,10 +262,10 @@ class ConfigurationOverviewServices:
                     'stock_name': configuration.stock.name,
                     'current_price': current_price,
                     'status_pid': 'FOLLOWING',
-                    'volume_buy': balance_by_stock.get('actual_vol', 0) if balance_by_stock else 0,
-                    'volume_trade': balance_by_stock.get('avaiable_vol', 0) if balance_by_stock else 0,
-                    'aver_price_buy': balance_by_stock.get('avg_price', 0) if balance_by_stock else 0,
-                    'current_profit': balance_by_stock.get('gain_loss_per', 0) if balance_by_stock else 0,
+                    'volume_buy': vol_buy,
+                    'volume_trade': vol_trade,
+                    'aver_price_buy': aver_price,
+                    'current_profit': profit,
                     "chart_type": configuration.config_type.name,
                     "level": configuration.level,
                     'following_chart_buy': following_chart_buy,
@@ -275,6 +296,18 @@ class ConfigurationOverviewServices:
                         user=user, stock=held_stock, config_type=overview.id
                     ).first()
 
+                vol_buy_held = held.get('actual_vol', 0)
+                vol_trade_held = held.get('avaiable_vol', 0)
+                avg_p_held = held.get('avg_price', 0)
+                cur_p_held = held.get('market_price', 0)
+                profit_held = held.get('gain_loss_per', 0)
+
+                if (not profit_held or profit_held == 0) and avg_p_held > 0 and cur_p_held > 0:
+                    profit_held = round((cur_p_held - avg_p_held) / avg_p_held * 100, 2)
+
+                if vol_trade_held <= 0 and vol_buy_held > 0:
+                    vol_trade_held = vol_buy_held
+
                 data.append({
                     'account_vps': account_name,
                     'account_vps_num': account_num,
@@ -292,12 +325,12 @@ class ConfigurationOverviewServices:
                     'volume_to_buy': getattr(existing_cfg, 'volume_to_buy', 0.0) or 0.0,
                     'stock_id': getattr(held_stock, 'id', None),
                     'stock_name': held_symbol,
-                    'current_price': held.get('market_price', 0),
+                    'current_price': cur_p_held,
                     'status_pid': 'FOLLOWING',
-                    'volume_buy': held.get('actual_vol', 0),
-                    'volume_trade': held.get('avaiable_vol', 0),
-                    'aver_price_buy': held.get('avg_price', 0),
-                    'current_profit': held.get('gain_loss_per', 0),
+                    'volume_buy': vol_buy_held,
+                    'volume_trade': vol_trade_held,
+                    'aver_price_buy': avg_p_held,
+                    'current_profit': profit_held,
                     'chart_type': '',
                     'level': getattr(existing_cfg, 'level', 0) if existing_cfg else 0,
                     'following_chart_buy': '',

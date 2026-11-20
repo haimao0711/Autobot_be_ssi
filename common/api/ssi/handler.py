@@ -733,24 +733,47 @@ def _position_metrics(p: dict) -> dict:
 
     Trả về: quantity, sellable, price, avg_price, market_value, gain_loss, gain_loss_oneday, gain_loss_pct.
     """
-    # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2)
-    total_qty_raw = _first(p, "totalQuantity", "totalQty", "holdingQuantity", "total", default=None)
-    if total_qty_raw is not None:
+    try:
+        logger.info("[SSI RAW POSITION ITEM] %s", json.dumps(p, ensure_ascii=False))
+    except Exception:
+        pass
+
+    # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2, T+3)
+    total_qty_raw = _first(p, 
+        "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
+        "totalHold", "holding", "holdQty", "volume", "totalVol", "vol", 
+        "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
+        "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
+    )
+    if total_qty_raw is not None and _num(total_qty_raw) > 0:
         qty = _num(total_qty_raw)
     else:
-        on_hand = _num(_first(p, "quantity", "onHand", "balance", "settledQuantity", default=0))
-        receiving = _num(_first(p, "receivingQuantity", "receivingQty", "waitingQuantity", "pendingQuantity", default=0))
-        t0 = _num(_first(p, "buyT0", "t0", default=0))
-        t1 = _num(_first(p, "buyT1", "t1", default=0))
-        t2 = _num(_first(p, "buyT2", "t2", default=0))
-        t_sum = t0 + t1 + t2
+        on_hand = _num(_first(p, 
+            "quantity", "onHand", "balance", "settledQuantity", "settledQty", 
+            "tradableQuantity", "tradableQty", "usableQuantity", "usable", default=0
+        ))
+        receiving = _num(_first(p, 
+            "receivingQuantity", "receivingQty", "receiving", "waitingQuantity", 
+            "waitingQty", "waitingReceive", "waitingReceiveQuantity", "waiting", 
+            "pendingQuantity", "pendingQty", "pending", "pendingReceive",
+            "enroute", "enrouteQty", "tradeEnroute", "buyWaiting", "buyEnroute", default=0
+        ))
+        t0 = _num(_first(p, "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
+        t1 = _num(_first(p, "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
+        t2 = _num(_first(p, "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
+        t3 = _num(_first(p, "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
+        t_sum = t0 + t1 + t2 + t3
         rec_total = receiving if receiving >= t_sum else t_sum
         qty = on_hand + rec_total
 
     if qty <= 0:
-        qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", default=0))
+        qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
 
-    sellable = _num(_first(p, "sellableQuantity", "sellableQty", "available", "availableQty", "avaiable_vol", "volume_trade", default=0))
+    sellable = _num(_first(p, 
+        "sellableQuantity", "sellableQty", "sellable", "available", "availableQty", 
+        "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
+        "tradableQty", "usableQuantity", "usable", default=0
+    ))
     price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
                              "matchPrice", "price", default=0))
     avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))
@@ -763,6 +786,22 @@ def _position_metrics(p: dict) -> dict:
             price = cur_p
         if avg <= 0 and cost_p > 0:
             avg = cost_p
+
+    # Fallback khối lượng nếu sàn trả quantity=0 do đang chờ về (T+1/T+2) nhưng có giá vốn avg > 0
+    if qty <= 0 and symbol and avg > 0:
+        try:
+            from apps.configuration.details.models import Configuration
+            from apps.configuration.type.services import ConfigurationTypeServices
+            overview_type = ConfigurationTypeServices.get_overview()
+            cfg = Configuration.objects.filter(stock__name__iexact=symbol, config_type=overview_type.id).first()
+            if cfg and cfg.volume_to_buy and cfg.volume_to_buy > 0:
+                qty = cfg.volume_to_buy
+        except Exception:
+            pass
+
+    # Nếu sàn chưa trả sellable cho cổ phiếu đang chờ về, fallback theo qty để bot và UI hiển thị khối lượng quản lý
+    if sellable <= 0 and qty > 0:
+        sellable = qty
 
     mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
     market_value = _num(mv_raw) if mv_raw is not None else qty * price
@@ -787,9 +826,9 @@ def _position_metrics(p: dict) -> dict:
 
     pct_raw = _first(p, "gainLossPercentage", "gainLossPercent", "gainLossPct",
                      "profitPercentage", "percentage_loss", "gain_loss_per", default=None)
-    if pct_raw is not None:
+    if pct_raw is not None and _num(pct_raw) != 0:
         gain_pct = _num(pct_raw)
-    elif avg and price:
+    elif avg > 0 and price > 0:
         gain_pct = (price - avg) / avg * 100
     else:
         gain_pct = 0.0
