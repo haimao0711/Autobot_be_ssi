@@ -588,29 +588,63 @@ def _get_cash(account) -> dict:
     return equity
 
 
-def _get_positions(account) -> list:
-    """Lấy danh sách vị thế cổ phiếu từ /api/v3/trading/position."""
-    params = {"accountNo": account.account_num}
+def _get_positions_and_summary(account) -> tuple:
+    """Lấy danh sách vị thế cổ phiếu và summary từ /api/v3/trading/position."""
+    # Thử gọi với querySummary="true" để SSI tính toán và trả về đầy đủ giá, lãi lỗ
+    params = {"accountNo": account.account_num, "querySummary": "true"}
     res = ssi_client.send_request(
         account,
         method="GET",
         path=ENDPOINT_TRADING_POSITION,
         params=params,
     )
-    if not isinstance(res, (dict, list)):
-        return []
-    if isinstance(res, list):
-        return [d for d in res if isinstance(d, dict)]
+    if not isinstance(res, (dict, list)) or not _ok(res):
+        params = {"accountNo": account.account_num}
+        res = ssi_client.send_request(
+            account,
+            method="GET",
+            path=ENDPOINT_TRADING_POSITION,
+            params=params,
+        )
 
-    for container in (res, res.get("data"), res.get("result")):
+    if not isinstance(res, (dict, list)):
+        return [], {}
+
+    positions = []
+    summary = {}
+
+    if isinstance(res, list):
+        return [d for d in res if isinstance(d, dict)], {}
+
+    for container in (res, res.get("data") if isinstance(res, dict) else None, res.get("result") if isinstance(res, dict) else None):
         if isinstance(container, dict):
+            if isinstance(container.get("summary"), dict):
+                summary.update(container["summary"])
             for k in ("equity", "positions", "stockPositions", "holdings", "items"):
                 val = container.get(k)
                 if isinstance(val, list):
-                    return [d for d in val if isinstance(d, dict)]
+                    positions = [d for d in val if isinstance(d, dict)]
+                    break
+            if positions:
+                break
         elif isinstance(container, list):
-            return [d for d in container if isinstance(d, dict)]
-    return _as_list(res)
+            positions = [d for d in container if isinstance(d, dict)]
+            break
+
+    # Lấy các trường summary ở root dict nếu có
+    if isinstance(res, dict):
+        for k in ("gainLoss", "gainLossValue", "gainLossOneDay", "gainLossOneday", "gainLossToday",
+                  "dailyPnL", "totalMarketValue", "marketValue", "unrealizedPnL", "totalGainLoss"):
+            if res.get(k) is not None and k not in summary:
+                summary[k] = res[k]
+
+    return positions, summary
+
+
+def _get_positions(account) -> list:
+    """Lấy danh sách vị thế cổ phiếu từ /api/v3/trading/position."""
+    positions, _ = _get_positions_and_summary(account)
+    return positions
 
 
 def handle_cash_balance_service(user_account, trade_account, url, session, asp_net_session):
@@ -646,6 +680,54 @@ def _unit_vnd(value) -> float:
     return p
 
 
+def _lookup_stock_prices(symbol: str) -> tuple:
+    """Tra cứu (giá hiện tại, giá vốn ước tính, giá tham chiếu đầu ngày) theo VND.
+
+    Trả về: (current_price_vnd, cost_price_vnd, ref_price_vnd)
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return 0.0, 0.0, 0.0
+
+    current_price = 0.0
+    cost_price = 0.0
+    ref_price = 0.0
+
+    # 1. Tra cứu giá hiện tại từ Redis socket cache
+    try:
+        from apps.stockSocket.services.cache_service import get_price
+        p = get_price(sym)
+        if p and p > 0:
+            current_price = _unit_vnd(p)
+    except Exception:
+        pass
+
+    # 2. Tra cứu từ database (Stock, StockM1, StockD1, Configuration)
+    try:
+        from apps.stock.models import Stock, StockM1, StockD1
+        from apps.stock.services import StockService
+        stock_obj = Stock.objects.filter(name__iexact=sym).first()
+        if stock_obj:
+            if current_price <= 0:
+                last_m1 = StockService.get_last_stock_chart_item_by_time(StockM1, stock_obj.id)
+                if last_m1 and last_m1.get('close'):
+                    current_price = _unit_vnd(last_m1['close'])
+            last_d1 = StockD1.objects.filter(stock=stock_obj).order_by('-time').first()
+            if last_d1 and last_d1.open:
+                ref_price = _unit_vnd(last_d1.open)
+
+            from apps.configuration.details.models import Configuration
+            from apps.configuration.type.services import ConfigurationTypeServices
+            overview_type = ConfigurationTypeServices.get_overview()
+            cfg = Configuration.objects.filter(stock=stock_obj, config_type=overview_type.id).first()
+            if cfg and cfg.price_to_buy_now and cfg.price_to_buy_now > 0:
+                cost_price = _unit_vnd(cfg.price_to_buy_now)
+    except Exception:
+        pass
+
+    return current_price, cost_price, ref_price
+
+
 def _position_metrics(p: dict) -> dict:
     """Tính các chỉ số của một vị thế (đồng), chịu được nhiều tên trường khác nhau của SSI.
 
@@ -673,11 +755,20 @@ def _position_metrics(p: dict) -> dict:
                              "matchPrice", "price", default=0))
     avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))
 
+    symbol = str(_first(p, "symbol", "instrumentID", "stock_name", default="")).strip().upper()
+    cur_p, cost_p, ref_p = 0.0, 0.0, 0.0
+    if (price <= 0 or avg <= 0) and symbol:
+        cur_p, cost_p, ref_p = _lookup_stock_prices(symbol)
+        if price <= 0 and cur_p > 0:
+            price = cur_p
+        if avg <= 0 and cost_p > 0:
+            avg = cost_p
+
     mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
     market_value = _num(mv_raw) if mv_raw is not None else qty * price
 
     gl_raw = _first(p, "gainLoss", "gainLossValue", "unrealizedPnL", "unrealizedPL",
-                    "floatingPL", "tradingPL", "profitLoss", "pnl", "value_loss", default=None)
+                    "floatingPL", "tradingPL", "profitLoss", "pnl", "value_loss", "totalGainLoss", default=None)
     if gl_raw is not None:
         gain_loss = _num(gl_raw)
     elif avg and price:
@@ -686,8 +777,13 @@ def _position_metrics(p: dict) -> dict:
         gain_loss = 0.0
 
     gl1_raw = _first(p, "gainLossOneDay", "gainLossOneday", "gainLossToday", "dailyPnL",
-                     "todayGainLoss", "oneDayGainLoss", default=None)
-    gain_loss_oneday = _num(gl1_raw) if gl1_raw is not None else 0.0
+                     "todayGainLoss", "oneDayGainLoss", "dayPnL", "dailyGainLoss", "todayPnL", default=None)
+    if gl1_raw is not None:
+        gain_loss_oneday = _num(gl1_raw)
+    elif ref_p and price and qty:
+        gain_loss_oneday = (price - ref_p) * qty
+    else:
+        gain_loss_oneday = 0.0
 
     pct_raw = _first(p, "gainLossPercentage", "gainLossPercent", "gainLossPct",
                      "profitPercentage", "percentage_loss", "gain_loss_per", default=None)
@@ -795,12 +891,26 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         return False, {}
 
     positions = []
+    summary = {}
     try:
-        positions = _get_positions(account) or []
+        positions, summary = _get_positions_and_summary(account)
         pm = [_position_metrics(p) for p in positions]
         market_value = sum(m["market_value"] for m in pm)
         gain_loss_total = sum(m["gain_loss"] for m in pm)
         gain_loss_oneday_total = sum(m["gain_loss_oneday"] for m in pm)
+
+        # Bổ sung từ summary nếu từng vị thế chưa có hoặc summary có giá trị
+        if summary:
+            gl_summary = _first(summary, "gainLoss", "gainLossValue", "unrealizedPnL", "totalGainLoss", "floatingPL", "pnl", default=None)
+            if gl_summary is not None and not gain_loss_total:
+                gain_loss_total = _num(gl_summary)
+            gl1_summary = _first(summary, "gainLossOneDay", "gainLossOneday", "gainLossToday", "dailyPnL", "todayGainLoss", "dayPnL", default=None)
+            if gl1_summary is not None and not gain_loss_oneday_total:
+                gain_loss_oneday_total = _num(gl1_summary)
+            mv_summary = _first(summary, "totalMarketValue", "marketValue", default=None)
+            if mv_summary is not None and not market_value:
+                market_value = _num(mv_summary)
+
         if positions and not market_value:
             logger.warning("SSI position không có giá thị trường, các khóa nhận được: %s",
                            sorted(positions[0].keys()))
@@ -812,6 +922,12 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
     # lmv (từ ppmmrAccount) = giá trị thị trường các mã đang nắm giữ -> dùng khi /position không có giá.
     if not market_value:
         market_value = _num(_first(cash, "lmv", default=0))
+
+    # Fallback lãi lỗ từ tổng vốn chờ về (buyT0, buyT1, buyT2) nếu SSI position không trả
+    if not gain_loss_total and market_value:
+        wait_cost = _num(_first(cash, "buyT0", default=0)) + _num(_first(cash, "buyT1", default=0)) + _num(_first(cash, "buyT2", default=0))
+        if wait_cost > 0:
+            gain_loss_total = market_value - wait_cost
 
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
