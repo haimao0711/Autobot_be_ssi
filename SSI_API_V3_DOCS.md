@@ -235,6 +235,28 @@
 - **Query Parameters:**
   - `accountNo`: string (required, vd: T017081)
   - `clientId`: string (optional, 6 số định danh)
+- **Response 200 (mẫu trang hướng dẫn, mọi giá trị là string, nằm ở root, `equity` cho tài khoản cơ sở, `derivative` cho phái sinh, có thể `null`):**
+  ```json
+  {
+    "equity": {
+      "accountNo": "string", "accountBalance": "string", "totalDebt": "string",
+      "interestLoan": "string", "overdueFeeLoan": "string", "withdrawable": "string",
+      "onHoldCash": "string", "sellUnmatched": "string", "sellT0": "string",
+      "sellT1": "string", "sellT2": "string", "buyUnmatched": "string",
+      "buyT0": "string", "buyT1": "string", "buyT2": "string",
+      "advancedCashT0": "string", "advancedCashT1": "string",
+      "holdSubscription": "string", "dividend": "string"
+    },
+    "derivative": {
+      "accountNo": "string", "accountBalance": "string", "fee": "string", "commission": "string",
+      "interest": "string", "extInterest": "string", "loan": "string", "deliveryAmount": "string",
+      "floatingPL": "string", "tradingPL": "string", "totalPL": "string", "withdrawable": "string",
+      "cashSSI": "string", "validNonCashSSI": "string", "withdrawableSSI": "string",
+      "cashVSDC": "string", "validNonCashVSDC": "string", "withdrawableVSDC": "string"
+    }
+  }
+  ```
+- **Lưu ý:** `accountBalance` là tiền mặt trong tài khoản (không phải tổng tài sản); `withdrawable` là tiền rút được. Tổng tài sản/giá trị cổ phiếu (`totalAssets`, `totalEquity`, `lmv`) lấy từ `ppmmrAccount`.
 
 ### 2.10. Lấy thông tin PP/MMR (`GET /api/v3/trading/ppmmrAccount`)
 - **Server URL:** `https://api.ssi.com.vn`

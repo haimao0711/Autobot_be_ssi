@@ -504,7 +504,8 @@ def _get_cash(account) -> dict:
             if not isinstance(pp_equity, dict) and isinstance(res_pp.get("result"), dict):
                 pp_equity = res_pp["result"].get("equity") or res_pp["result"]
             if isinstance(pp_equity, dict):
-                for k in ("purchasingPower", "marginRatio", "totalAssets", "totalEquity", "ee", "ee50"):
+                for k in ("purchasingPower", "marginRatio", "totalAssets", "totalEquity", "ee", "ee50",
+                          "lmv", "lmvMargin", "lmvNonMarginable", "liability", "netLiability"):
                     if pp_equity.get(k) is not None:
                         equity[k] = pp_equity[k]
     except Exception as e:
@@ -718,12 +719,19 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         logger.warning("SSI validate: lỗi tính vị thế: %s", e)
         market_value = gain_loss_total = gain_loss_oneday_total = 0
 
+    # accountBalance (SSI) = tiền mặt trong tài khoản; withdrawable = tiền rút được.
+    # lmv (từ ppmmrAccount) = giá trị thị trường các mã đang nắm giữ -> dùng khi /position không có giá.
+    if not market_value:
+        market_value = _num(_first(cash, "lmv", default=0))
+
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
     purchasing = _num(_first(cash, "purchasingPower", "ee50", "withdrawable", default=withdrawable))
+    total_equity_api = _first(cash, "totalEquity", "totalAssets", default=None)
+    total_equity = _num(total_equity_api) if total_equity_api is not None else account_bal + market_value
 
     result = {
-        "total_equity": int(account_bal + market_value),
+        "total_equity": int(total_equity),
         "cash_balance": int(withdrawable),
         "total_market_value": int(market_value),
         "cash_available": int(purchasing),
