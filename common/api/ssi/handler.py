@@ -740,11 +740,6 @@ def _position_metrics(p: dict) -> dict:
 
     Trả về: quantity, sellable, price, avg_price, market_value, gain_loss, gain_loss_oneday, gain_loss_pct.
     """
-    try:
-        logger.info("[SSI RAW POSITION ITEM] %s", json.dumps(p, ensure_ascii=False))
-    except Exception:
-        pass
-
     # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2, T+3)
     total_qty_raw = _first(p, 
         "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
