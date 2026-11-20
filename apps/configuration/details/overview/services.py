@@ -47,6 +47,36 @@ class ConfigurationOverviewServices:
 
         except Configuration.DoesNotExist:
             return {}
+
+    @staticmethod
+    def get_stock_balance(user):
+        """Lấy danh mục cổ phiếu thực tế từ sàn giao dịch (SSI/VPS) của user."""
+        vps_account = AccountService.get_account_by_user(user)
+        if not vps_account:
+            return []
+        stock_balance_data = []
+        try:
+            from common.api.ssi import handler as ssi_handler
+            positions = ssi_handler._get_positions(vps_account)
+            for p in positions:
+                m = ssi_handler._position_metrics(p)
+                symbol = ssi_handler._first(p, 'symbol', 'instrumentID', 'stock_name', 'shareCode')
+                if not symbol:
+                    continue
+                if m['quantity'] <= 0 and m['sellable'] <= 0 and m['avg_price'] <= 0:
+                    continue
+                stock_balance_data.append({
+                    'symbol': str(symbol).strip().upper(),
+                    'actual_vol': int(m['quantity']),
+                    'avaiable_vol': int(m['sellable']),
+                    'avg_price': ssi_handler._from_vnd(m['avg_price']),
+                    'gain_loss_per': round(m['gain_loss_pct'], 2),
+                    'market_price': ssi_handler._from_vnd(m['price']),
+                })
+        except Exception as e:
+            logger.error(f"Error get_stock_balance for user {user.id}: {e}")
+        return stock_balance_data
+
     @staticmethod
     def invalidate_user_config_cache(user_id):
         """Xóa cache danh sách cấu hình của user khi có thay đổi."""
@@ -165,18 +195,21 @@ class ConfigurationOverviewServices:
                         positions = ssi_handler._get_positions(vps_account)
                         for p in positions:
                             m = ssi_handler._position_metrics(p)
-                            symbol = ssi_handler._first(p, 'symbol', 'instrumentID')
-                            if not symbol or m['quantity'] <= 0:
+                            symbol = ssi_handler._first(p, 'symbol', 'instrumentID', 'stock_name', 'shareCode')
+                            if not symbol:
+                                continue
+                            if m['quantity'] <= 0 and m['sellable'] <= 0 and m['avg_price'] <= 0:
                                 continue
                             stock_balance_data.append({
-                                'symbol': str(symbol).upper(),
+                                'symbol': str(symbol).strip().upper(),
                                 'actual_vol': int(m['quantity']),
                                 'avaiable_vol': int(m['sellable']),
                                 'avg_price': ssi_handler._from_vnd(m['avg_price']),
                                 'gain_loss_per': round(m['gain_loss_pct'], 2),
                                 'market_price': ssi_handler._from_vnd(m['price']),
                             })
-                        ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
+                        if stock_balance_data:
+                            ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
                     except Exception as e:
                         logger.error(f"SSI stock balance error in config: {e}")
 
@@ -188,7 +221,8 @@ class ConfigurationOverviewServices:
                 following_chart_sell = stock_data[stock_name]['following_chart_sell']
                 trading_chart_buy = stock_data[stock_name]['trading_chart_buy']
                 trading_chart_sell = stock_data[stock_name]['trading_chart_sell']
-                balance_by_stock = next((stock for stock in stock_balance_data if stock.get('symbol') == stock_name), None)
+                stock_name_clean = str(stock_name or '').strip().upper()
+                balance_by_stock = next((stock for stock in stock_balance_data if str(stock.get('symbol') or '').strip().upper() == stock_name_clean), None)
                 return {
                     'account_vps': account_name,
                     'account_vps_num': account_num,
@@ -198,19 +232,19 @@ class ConfigurationOverviewServices:
                     'is_buy_hand': configuration.is_buy_hand,
                     'is_sell_hand': configuration.is_sell_hand,
                     'is_use_price_to_buy': configuration.is_use_price_to_buy,
-                    'price_to_buy_now': configuration.price_to_buy_now,
+                    'price_to_buy_now': configuration.price_to_buy_now if configuration.price_to_buy_now is not None else 0.0,
                     'is_use_stoploss': configuration.is_use_stoploss,
                     'is_use_takeprofit': configuration.is_use_takeprofit,
                     'is_update_volume_buy': configuration.is_update_volume_buy,
-                    'volume_to_buy': configuration.volume_to_buy,
+                    'volume_to_buy': configuration.volume_to_buy if configuration.volume_to_buy is not None else 0.0,
                     'stock_id': configuration.stock.id,
                     'stock_name': configuration.stock.name,
                     'current_price': current_price,
                     'status_pid': 'FOLLOWING',
-                    'volume_buy': balance_by_stock.get('actual_vol') if balance_by_stock else 0,
-                    'volume_trade': balance_by_stock.get('avaiable_vol') if balance_by_stock else 0,
-                    'aver_price_buy': balance_by_stock.get('avg_price') if balance_by_stock else 0,
-                    'current_profit': balance_by_stock.get('gain_loss_per') if balance_by_stock else 0,
+                    'volume_buy': balance_by_stock.get('actual_vol', 0) if balance_by_stock else 0,
+                    'volume_trade': balance_by_stock.get('avaiable_vol', 0) if balance_by_stock else 0,
+                    'aver_price_buy': balance_by_stock.get('avg_price', 0) if balance_by_stock else 0,
+                    'current_profit': balance_by_stock.get('gain_loss_per', 0) if balance_by_stock else 0,
                     "chart_type": configuration.config_type.name,
                     "level": configuration.level,
                     'following_chart_buy': following_chart_buy,
@@ -223,9 +257,9 @@ class ConfigurationOverviewServices:
             data = [process_configuration(config) for config in configurations]
 
             # Bổ sung các cổ phiếu ĐANG NẮM GIỮ nhưng chưa có cấu hình overview để frontend hiển thị
-            configured_symbols = {str(c.stock.name).upper() for c in configurations}
+            configured_symbols = {str(c.stock.name).strip().upper() for c in configurations if c.stock and c.stock.name}
             for held in stock_balance_data:
-                held_symbol = str(held.get('symbol') or '').upper()
+                held_symbol = str(held.get('symbol') or '').strip().upper()
                 if not held_symbol or held_symbol in configured_symbols:
                     continue
                 held_stock = None
@@ -233,21 +267,29 @@ class ConfigurationOverviewServices:
                     held_stock = StockService.get_stock_by_symbol(held_symbol)
                 except Exception:
                     held_stock = None
+
+                # Lấy cấu hình Overview đã lưu nếu có (để giữ price_to_buy_now, volume_to_buy)
+                existing_cfg = None
+                if held_stock:
+                    existing_cfg = Configuration.objects.filter(
+                        user=user, stock=held_stock, config_type=overview.id
+                    ).first()
+
                 data.append({
                     'account_vps': account_name,
                     'account_vps_num': account_num,
-                    'id': None,
-                    'is_configured': False,
-                    'is_block_buy': False,
-                    'is_block_sell': False,
-                    'is_buy_hand': False,
-                    'is_sell_hand': False,
-                    'is_use_price_to_buy': False,
-                    'price_to_buy_now': 0,
-                    'is_use_stoploss': False,
-                    'is_use_takeprofit': False,
-                    'is_update_volume_buy': False,
-                    'volume_to_buy': 0,
+                    'id': getattr(existing_cfg, 'id', None),
+                    'is_configured': bool(existing_cfg),
+                    'is_block_buy': getattr(existing_cfg, 'is_block_buy', False),
+                    'is_block_sell': getattr(existing_cfg, 'is_block_sell', False),
+                    'is_buy_hand': getattr(existing_cfg, 'is_buy_hand', False),
+                    'is_sell_hand': getattr(existing_cfg, 'is_sell_hand', False),
+                    'is_use_price_to_buy': getattr(existing_cfg, 'is_use_price_to_buy', False),
+                    'price_to_buy_now': getattr(existing_cfg, 'price_to_buy_now', 0.0) or 0.0,
+                    'is_use_stoploss': getattr(existing_cfg, 'is_use_stoploss', False),
+                    'is_use_takeprofit': getattr(existing_cfg, 'is_use_takeprofit', False),
+                    'is_update_volume_buy': getattr(existing_cfg, 'is_update_volume_buy', False),
+                    'volume_to_buy': getattr(existing_cfg, 'volume_to_buy', 0.0) or 0.0,
                     'stock_id': getattr(held_stock, 'id', None),
                     'stock_name': held_symbol,
                     'current_price': held.get('market_price', 0),
@@ -257,7 +299,7 @@ class ConfigurationOverviewServices:
                     'aver_price_buy': held.get('avg_price', 0),
                     'current_profit': held.get('gain_loss_per', 0),
                     'chart_type': '',
-                    'level': 0,
+                    'level': getattr(existing_cfg, 'level', 0) if existing_cfg else 0,
                     'following_chart_buy': '',
                     'following_chart_sell': '',
                     'trading_chart_buy': '',
@@ -314,14 +356,14 @@ class ConfigurationOverviewServices:
                     'user': user.id,
                     'stock': stock.id,
                     'config_type': ConfigurationTypeServices.get_overview().id,
-                    'is_use_price_to_buy': False,
-                    'price_to_buy_now': 0.0,
-                    'is_use_stoploss': False,
-                    'percent_to_stoploss': 0.0,
-                    'is_use_takeprofit': False,
-                    'percent_to_takeprofit': 0.0,
-                    'is_update_volume_buy': False,
-                    'volume_to_buy': 0.0
+                    'is_use_price_to_buy': bool(init_overview_data.get('is_use_price_to_buy', False)),
+                    'price_to_buy_now': float(init_overview_data.get('price_to_buy_now') or 0.0),
+                    'is_use_stoploss': bool(init_overview_data.get('is_use_stoploss', False)),
+                    'percent_to_stoploss': float(init_overview_data.get('percent_to_stoploss') or 0.0),
+                    'is_use_takeprofit': bool(init_overview_data.get('is_use_takeprofit', False)),
+                    'percent_to_takeprofit': float(init_overview_data.get('percent_to_takeprofit') or 0.0),
+                    'is_update_volume_buy': bool(init_overview_data.get('is_update_volume_buy', False)),
+                    'volume_to_buy': float(init_overview_data.get('volume_to_buy') or 0.0)
                 }
                 
                 overview_serializer = ConfigurationSerializers(data=init_data)
@@ -358,9 +400,6 @@ class ConfigurationOverviewServices:
         return ErrorType.CREATE_FAILED, {}
 
     def update_a_overview_configuration(user, update_overview_data):
-
-        # if UserAccountService.check_account_belong_user(user=user, account=account.main_account.id) == False:
-        #     return ErrorType.UPDATE_FAILED, {}
         allow_fields = ['is_update_volume_buy', 'is_use_price_to_buy', 'is_block_buy', 'is_block_sell', 'is_buy_hand', 'is_sell_hand',
                         'is_use_stoploss', 'is_use_takeprofit', 'price_to_buy_now', 'volume_to_buy', 'margin_percentage', 'level']
         update_data = {
@@ -369,9 +408,43 @@ class ConfigurationOverviewServices:
             if (value := update_overview_data.get(field)) is not None
         }
 
-        overview_configuration = ConfigurationOverviewServices.get_overview_exist(
-            user=user, stock_id=update_overview_data.get('stock_id'))
+        config_id = update_overview_data.get('id')
+        stock_id = update_overview_data.get('stock_id')
+        stock_name = update_overview_data.get('stock_name')
+        overview_type = ConfigurationTypeServices.get_overview()
 
+        overview_configuration = None
+        if config_id:
+            overview_configuration = Configuration.objects.filter(id=config_id, user=user).first()
+        if not overview_configuration and stock_id:
+            overview_configuration = Configuration.objects.filter(user=user, config_type=overview_type.id, stock_id=stock_id).first()
+        if not overview_configuration and stock_name:
+            overview_configuration = Configuration.objects.filter(user=user, config_type=overview_type.id, stock__name__iexact=str(stock_name).strip()).first()
+
+        # Nếu chưa có trong DB (ví dụ từ danh sách cổ phiếu đang nắm giữ), tự động tạo bản ghi Overview để lưu cấu hình
+        if not overview_configuration:
+            target_stock = None
+            if stock_id:
+                target_stock = StockService.get_stock_by_id(stock_id)
+            elif stock_name:
+                target_stock = StockService.get_stock_by_symbol(str(stock_name).strip())
+
+            if target_stock:
+                try:
+                    overview_configuration = Configuration.objects.create(
+                        user=user,
+                        stock=target_stock,
+                        config_type=overview_type,
+                        price_to_buy_now=float(update_overview_data.get('price_to_buy_now') or 0.0),
+                        volume_to_buy=float(update_overview_data.get('volume_to_buy') or 0.0),
+                        is_use_price_to_buy=bool(update_overview_data.get('is_use_price_to_buy', False)),
+                        is_update_volume_buy=bool(update_overview_data.get('is_update_volume_buy', False)),
+                    )
+                except Exception as e:
+                    logger.error(f"Tạo overview configuration tự động thất bại: {e}")
+
+        if not overview_configuration:
+            return ErrorType.UPDATE_FAILED, {'message': 'Không tìm thấy cấu hình mã cổ phiếu để cập nhật.'}
 
         try:
             overview_serializer = TradeHandleSerializers(
@@ -381,9 +454,7 @@ class ConfigurationOverviewServices:
                 return_data = {field: getattr(
                     updated_instance, field) for field in allow_fields}
                 return_data['user'] = user.id
-                return_data['stock_id'] = update_overview_data.get('stock_id')
-                # return_data['account'] = update_overview_data.get(
-                #     'account_id')
+                return_data['stock_id'] = getattr(updated_instance.stock, 'id', stock_id)
                 ConfigurationOverviewServices.invalidate_user_config_cache(user.id)
                 return SuccessType.UPDATED_SUCCESS, return_data
             else:

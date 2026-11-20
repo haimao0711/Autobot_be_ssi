@@ -604,7 +604,7 @@ def _get_positions(account) -> list:
 
     for container in (res, res.get("data"), res.get("result")):
         if isinstance(container, dict):
-            for k in ("equity", "positions", "stockPositions", "holdings"):
+            for k in ("equity", "positions", "stockPositions", "holdings", "items"):
                 val = container.get(k)
                 if isinstance(val, list):
                     return [d for d in val if isinstance(d, dict)]
@@ -651,17 +651,33 @@ def _position_metrics(p: dict) -> dict:
 
     Trả về: quantity, sellable, price, avg_price, market_value, gain_loss, gain_loss_oneday, gain_loss_pct.
     """
-    qty = _num(_first(p, "quantity", "onHand", "balance", default=0))
-    sellable = _num(_first(p, "sellableQuantity", "sellableQty", "available", default=0))
+    # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2)
+    total_qty_raw = _first(p, "totalQuantity", "totalQty", "holdingQuantity", "total", default=None)
+    if total_qty_raw is not None:
+        qty = _num(total_qty_raw)
+    else:
+        on_hand = _num(_first(p, "quantity", "onHand", "balance", "settledQuantity", default=0))
+        receiving = _num(_first(p, "receivingQuantity", "receivingQty", "waitingQuantity", "pendingQuantity", default=0))
+        t0 = _num(_first(p, "buyT0", "t0", default=0))
+        t1 = _num(_first(p, "buyT1", "t1", default=0))
+        t2 = _num(_first(p, "buyT2", "t2", default=0))
+        t_sum = t0 + t1 + t2
+        rec_total = receiving if receiving >= t_sum else t_sum
+        qty = on_hand + rec_total
+
+    if qty <= 0:
+        qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", default=0))
+
+    sellable = _num(_first(p, "sellableQuantity", "sellableQty", "available", "availableQty", "avaiable_vol", "volume_trade", default=0))
     price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
                              "matchPrice", "price", default=0))
-    avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", default=0))
+    avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))
 
     mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
     market_value = _num(mv_raw) if mv_raw is not None else qty * price
 
     gl_raw = _first(p, "gainLoss", "gainLossValue", "unrealizedPnL", "unrealizedPL",
-                    "profitLoss", "pnl", "value_loss", default=None)
+                    "floatingPL", "tradingPL", "profitLoss", "pnl", "value_loss", default=None)
     if gl_raw is not None:
         gain_loss = _num(gl_raw)
     elif avg and price:
@@ -673,7 +689,8 @@ def _position_metrics(p: dict) -> dict:
                      "todayGainLoss", "oneDayGainLoss", default=None)
     gain_loss_oneday = _num(gl1_raw) if gl1_raw is not None else 0.0
 
-    pct_raw = _first(p, "gainLossPercentage", "gainLossPercent", "percentage_loss", default=None)
+    pct_raw = _first(p, "gainLossPercentage", "gainLossPercent", "gainLossPct",
+                     "profitPercentage", "percentage_loss", "gain_loss_per", default=None)
     if pct_raw is not None:
         gain_pct = _num(pct_raw)
     elif avg and price:
@@ -706,7 +723,7 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
     def avail(p):
         return metrics[id(p)]["sellable"]
 
-    existing = [p for p in positions if vol(p) > 0]
+    existing = [p for p in positions if vol(p) > 0 or avail(p) > 0 or metrics[id(p)]["avg_price"] > 0]
     total_buy = sum(vol(p) for p in existing)
     total_trade = sum(avail(p) for p in existing)
     percent_buy_trade = (total_trade / total_buy * 100) if total_buy else 0
@@ -719,9 +736,9 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
         "floor_price": UNKNOWN_FLOOR_PRICE,
     }
 
-    symbol_upper = str(symbol).upper()
+    symbol_upper = str(symbol or "").strip().upper()
     for p in positions:
-        p_symbol = str(_first(p, "symbol", "instrumentID", default="")).upper()
+        p_symbol = str(_first(p, "symbol", "instrumentID", "stock_name", default="")).strip().upper()
         if p_symbol == symbol_upper:
             m = metrics[id(p)]
             stock_balance = {
@@ -741,7 +758,7 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
     return {
         "number_stock_existing": len(existing),
         "stock_balance": stock_balance,
-        "symbols_existing": [str(_first(p, "symbol", "instrumentID")) for p in existing],
+        "symbols_existing": [str(_first(p, "symbol", "instrumentID", "stock_name")).strip() for p in existing if _first(p, "symbol", "instrumentID", "stock_name")],
         "percent_buy_trade": percent_buy_trade,
     }
 
