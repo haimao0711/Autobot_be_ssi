@@ -159,26 +159,23 @@ class ConfigurationOverviewServices:
                         stock_balance_data = []
 
                 if not stock_balance_data:
-                    from common.api.ssi import client as ssi_client
-                    from common.api.ssi.constants import ENDPOINT_TRADING_POSITION
                     try:
-                        res = ssi_client.send_request(vps_account, 'GET', ENDPOINT_TRADING_POSITION, params={'accountNo': account_num})
-                        data = res.get('data') if isinstance(res.get('data'), (dict, list)) else res
-                        equity = []
-                        if isinstance(data, dict):
-                            equity = data.get('equity') or data.get('positions') or []
-                        elif isinstance(data, list):
-                            equity = data
-                        stock_balance_data = [
-                            {
-                                'symbol': p.get('symbol'),
-                                'actual_vol': p.get('quantity', 0),
-                                'avaiable_vol': p.get('sellableQuantity', 0),
-                                'avg_price': p.get('avgPrice', 0),
-                                'gain_loss_per': p.get('gainLossPercentage', 0),
-                            }
-                            for p in equity if isinstance(p, dict)
-                        ]
+                        # Dùng chung logic với handle_stock_balance_service để số liệu nhất quán
+                        from common.api.ssi import handler as ssi_handler
+                        positions = ssi_handler._get_positions(vps_account)
+                        for p in positions:
+                            m = ssi_handler._position_metrics(p)
+                            symbol = ssi_handler._first(p, 'symbol', 'instrumentID')
+                            if not symbol or m['quantity'] <= 0:
+                                continue
+                            stock_balance_data.append({
+                                'symbol': str(symbol).upper(),
+                                'actual_vol': int(m['quantity']),
+                                'avaiable_vol': int(m['sellable']),
+                                'avg_price': ssi_handler._from_vnd(m['avg_price']),
+                                'gain_loss_per': round(m['gain_loss_pct'], 2),
+                                'market_price': ssi_handler._from_vnd(m['price']),
+                            })
                         ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
                     except Exception as e:
                         logger.error(f"SSI stock balance error in config: {e}")
@@ -224,6 +221,48 @@ class ConfigurationOverviewServices:
 
             # List comprehension thuần Python cực nhanh (<1ms) thay vì ThreadPoolExecutor
             data = [process_configuration(config) for config in configurations]
+
+            # Bổ sung các cổ phiếu ĐANG NẮM GIỮ nhưng chưa có cấu hình overview để frontend hiển thị
+            configured_symbols = {str(c.stock.name).upper() for c in configurations}
+            for held in stock_balance_data:
+                held_symbol = str(held.get('symbol') or '').upper()
+                if not held_symbol or held_symbol in configured_symbols:
+                    continue
+                held_stock = None
+                try:
+                    held_stock = StockService.get_stock_by_symbol(held_symbol)
+                except Exception:
+                    held_stock = None
+                data.append({
+                    'account_vps': account_name,
+                    'account_vps_num': account_num,
+                    'id': None,
+                    'is_configured': False,
+                    'is_block_buy': False,
+                    'is_block_sell': False,
+                    'is_buy_hand': False,
+                    'is_sell_hand': False,
+                    'is_use_price_to_buy': False,
+                    'price_to_buy_now': 0,
+                    'is_use_stoploss': False,
+                    'is_use_takeprofit': False,
+                    'is_update_volume_buy': False,
+                    'volume_to_buy': 0,
+                    'stock_id': getattr(held_stock, 'id', None),
+                    'stock_name': held_symbol,
+                    'current_price': held.get('market_price', 0),
+                    'status_pid': 'FOLLOWING',
+                    'volume_buy': held.get('actual_vol', 0),
+                    'volume_trade': held.get('avaiable_vol', 0),
+                    'aver_price_buy': held.get('avg_price', 0),
+                    'current_profit': held.get('gain_loss_per', 0),
+                    'chart_type': '',
+                    'level': 0,
+                    'following_chart_buy': '',
+                    'following_chart_sell': '',
+                    'trading_chart_buy': '',
+                    'trading_chart_sell': '',
+                })
 
             # Cache toàn bộ kết quả cho user trong 8 giây (phù hợp chu kỳ polling 10s)
             try:
