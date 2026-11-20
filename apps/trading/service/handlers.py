@@ -891,6 +891,21 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                     # Ensure we don't exceed purchasing power
                     max_volume_by_cash = (cash_available // price_set_buy // 100) * 100 if price_set_buy > 0 else 0
                     volume = min(volume_calc, max_volume_by_cash)
+
+                    if volume < 100:
+                        msg_vol_err = (
+                            f"⚠️ Yêu cầu mua {symbol} không thành công: Mã {symbol} đã đạt khối lượng tối đa hoặc khối lượng quá nhỏ (< 100 CP).\n"
+                            f"• Đang nắm giữ: {int(stock_balance):,} CP\n"
+                            f"• Cấu hình mua tối đa: {int(volume_to_buy):,} CP\n"
+                            f"• Khối lượng có thể mua thêm: {int(volume_buy_balance):,} CP"
+                        )
+                        if max_volume_by_cash < 100:
+                            msg_vol_err += f"\n• Sức mua hiện tại chỉ đủ mua tối đa: {int(max_volume_by_cash):,} CP"
+                        logger.info(f"Mã {symbol} đạt khối lượng tối đa hoặc khối lượng quá nhỏ (< 100)")
+                        send_message_telegram(user, MessageTypeEnum.OVERALL, msg_vol_err)
+                        send_message_telegram(user, MessageTypeEnum.ACT, msg_vol_err)
+                        return
+
                     current_batch_order_nums = [] # Lưu các mã lệnh của phiên hiện tại
                     round_start_time_str = datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')).strftime("%H:%M:%S")
                     
@@ -1039,6 +1054,15 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                             time.sleep(2)
                         else:
                             logger.info(f'Mã {symbol} đạt khối lượng tối đa hoặc volume < 100') 
+                            if not is_send_order_buy:
+                                msg_vol_err = (
+                                    f"⚠️ Yêu cầu mua {symbol} không thành công: Mã {symbol} đã đạt khối lượng tối đa hoặc khối lượng quá nhỏ (< 100 CP).\n"
+                                    f"• Đang nắm giữ: {int(stock_balance):,} CP\n"
+                                    f"• Cấu hình mua tối đa: {int(volume_to_buy):,} CP\n"
+                                    f"• Khối lượng có thể mua thêm: {int(volume_buy_balance):,} CP"
+                                )
+                                send_message_telegram(user, MessageTypeEnum.OVERALL, msg_vol_err)
+                                send_message_telegram(user, MessageTypeEnum.ACT, msg_vol_err) 
                     except Exception as e:
                         logger.error(f"Lỗi trong quá trình đặt lệnh mua tay {symbol}: {e}")
                     finally:
@@ -1543,6 +1567,12 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                 volume_balance = (available_vol // 100) * 100
                 half = volume_balance / 2
                 volume = int(volume_balance) if volume_sell == 'all' else int(half + 50) if half % 100 == 50 else int(half)
+                if volume < 100:
+                    msg_sell_err = f"⚠️ Yêu cầu bán {symbol} không thành công: Khối lượng khả dụng để bán quá nhỏ (< 100 CP). (Khả dụng: {int(available_vol):,} CP)"
+                    logger.info(msg_sell_err)
+                    send_message_telegram(user, MessageTypeEnum.OVERALL, msg_sell_err)
+                    send_message_telegram(user, MessageTypeEnum.ACT, msg_sell_err)
+                    return
                 sell_messages = []
                 sell_attrs = {
                     "user_account": account,
@@ -2142,6 +2172,18 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                             logger.info('roi vao truong hop khong du tien mua theo yeu cau nen mua het so tien con lai')
                             volume = cash_available/start_price
                             volume = int(volume // 100 * 100)
+
+                        if volume < 100:
+                            msg_vol_err = (
+                                f"⚠️ [Auto] Không thể mua {symbol}: Mã {symbol} đã đạt khối lượng tối đa hoặc khối lượng quá nhỏ (< 100 CP).\n"
+                                f"• Đang nắm giữ: {int(volume_stock_balance):,} CP\n"
+                                f"• Cấu hình mua tối đa: {int(volume_to_buy):,} CP\n"
+                                f"• Khối lượng có thể mua thêm: {int(volume_buy_balance):,} CP"
+                            )
+                            logger.info(f"Mã {symbol} đạt khối lượng tối đa hoặc khối lượng quá nhỏ (< 100)")
+                            send_message_telegram(user, MessageTypeEnum.OVERALL, msg_vol_err)
+                            send_message_telegram(user, MessageTypeEnum.ACT, msg_vol_err)
+                            return
                         buy_order_overrall_attrs = {
                             'user_account': account,
                             'stock': symbol,
