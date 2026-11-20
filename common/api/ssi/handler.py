@@ -133,51 +133,91 @@ def _account(user_account, trade_account):
     return account
 
 
+# Biến lưu định dạng ngày đã xác nhận hoạt động với SSI orderBook: 'iso' | 'slash' | 'dash'
+_ORDER_BOOK_DATE_MODE = "iso"
+
+
+def _format_order_book_dates(start_date=None, end_date=None, mode="iso"):
+    now = datetime.now()
+    if mode == "iso":
+        # Chuẩn ISO 8601 (OpenAPI spec: string($date-time), vd: 2026-11-20T00:00:00Z)
+        d_start = str(start_date)[:10].replace("/", "-") if start_date else now.strftime("%Y-%m-%d")
+        d_end = str(end_date)[:10].replace("/", "-") if end_date else now.strftime("%Y-%m-%d")
+        return f"{d_start}T00:00:00Z", f"{d_end}T23:59:59Z"
+    elif mode == "slash":
+        # YYYY/MM/DD
+        d_start = str(start_date)[:10].replace("-", "/") if start_date else now.strftime("%Y/%m/%d")
+        d_end = str(end_date)[:10].replace("-", "/") if end_date else now.strftime("%Y/%m/%d")
+        return d_start, d_end
+    else:
+        # YYYY-MM-DD
+        d_start = str(start_date)[:10].replace("/", "-") if start_date else now.strftime("%Y-%m-%d")
+        d_end = str(end_date)[:10].replace("/", "-") if end_date else now.strftime("%Y-%m-%d")
+        return d_start, d_end
+
+
 def _get_order_book(account, start_date=None, end_date=None) -> list:
     """Lấy danh sách lệnh trong ngày hoặc khoảng thời gian từ /api/v3/trading/orderBook."""
-    fmt = "%Y/%m/%d"
-    today_str = datetime.now().strftime(fmt)
-    from_date = start_date or today_str
-    to_date = end_date or today_str
+    global _ORDER_BOOK_DATE_MODE
 
-    params = {
-        "accountNo": account.account_num,
-        "from": from_date,
-        "to": to_date,
-        "pageSize": 100,
-        "pageIndex": 1,
-    }
+    modes_to_try = [_ORDER_BOOK_DATE_MODE]
+    for m in ("iso", "slash", "dash"):
+        if m not in modes_to_try:
+            modes_to_try.append(m)
 
-    try:
-        res = ssi_client.send_request(
-            account,
-            method="GET",
-            path=ENDPOINT_TRADING_ORDER_BOOK,
-            params=params,
-            need_signature=False,
-        )
-    except Exception as e:
-        logger.error("SSI get_order_book lỗi: %s", e)
-        return []
+    res = None
+    for mode in modes_to_try:
+        from_date, to_date = _format_order_book_dates(start_date, end_date, mode)
+        params = {
+            "accountNo": account.account_num,
+            "from": from_date,
+            "to": to_date,
+            "pageSize": 100,
+            "pageIndex": 1,
+        }
 
-    if not isinstance(res, (dict, list)):
+        try:
+            res = ssi_client.send_request(
+                account,
+                method="GET",
+                path=ENDPOINT_TRADING_ORDER_BOOK,
+                params=params,
+                need_signature=False,
+            )
+        except Exception as e:
+            logger.error("SSI get_order_book lỗi (mode=%s): %s", mode, e)
+            continue
+
+        if _ok(res):
+            _ORDER_BOOK_DATE_MODE = mode
+            break
+        else:
+            logger.warning("SSI get_order_book (mode=%s) phản hồi không thành công: %s", mode, res)
+
+    if not isinstance(res, (dict, list)) or not _ok(res):
         return []
 
     orders = None
-    for container in (res, res.get("data") if isinstance(res, dict) else None, res.get("result") if isinstance(res, dict) else None):
-        if isinstance(container, list):
-            orders = container
-            break
-        elif isinstance(container, dict):
-            for k in ("orders", "orderList", "orderBook", "data"):
-                val = container.get(k)
-                if isinstance(val, list):
-                    orders = val
-                    break
+    if isinstance(res, list):
+        orders = res
+    elif isinstance(res, dict):
+        for k in ("orderList", "orders", "orderBook", "items", "data", "result"):
+            val = res.get(k)
+            if isinstance(val, list):
+                orders = val
+                break
+            elif isinstance(val, dict):
+                for sub_k in ("orderList", "orders", "orderBook", "items", "data"):
+                    sub_val = val.get(sub_k)
+                    if isinstance(sub_val, list):
+                        orders = sub_val
+                        break
             if orders is not None:
                 break
 
-    return _as_list(orders if orders is not None else res)
+    if orders is None:
+        return []
+    return [d for d in orders if isinstance(d, dict)]
 
 
 # ------------------------------------------------------------------ orders
@@ -296,17 +336,28 @@ def handle_update_order_service(user_account, trade_account, url, symbol, sessio
     }
 
 
-def handle_cancel_order_service(user_account, url, session, asp_net_session, order_num, ref_id):
+def handle_cancel_order_service(user_account, url, session, asp_net_session, order_num, ref_id, trade_account=None):
     """Hủy lệnh qua DELETE /api/v3/trading/order."""
+    if not order_num or str(order_num).strip() in ("", "None", "0"):
+        logger.error("SSI hủy lệnh thất bại: order_num không hợp lệ (%s)", order_num)
+        return None
+
     try:
-        account = _account(user_account, None)
+        account = _account(user_account, trade_account)
         ssi_client.ensure_token(account)
+
+        client_cancel_id = _request_id(ref_id)
+        clean_order_num = str(order_num).strip()
 
         body = {
             "accountNo": account.account_num,
-            "orderId": str(order_num),
+            "orderId": clean_order_num,
+            "clientCancelId": client_cancel_id,
             "deviceId": ssi_client.get_device_id(),
         }
+
+        logger.info("SSI gửi yêu cầu hủy lệnh: accountNo=%s, orderId=%s, clientCancelId=%s",
+                    account.account_num, clean_order_num, client_cancel_id)
 
         res = ssi_client.send_request(
             account,
@@ -319,11 +370,13 @@ def handle_cancel_order_service(user_account, url, session, asp_net_session, ord
         logger.error("SSI hủy lệnh ngoại lệ: %s", e)
         return None
 
+    logger.info("SSI kết quả phản hồi hủy lệnh %s: %s", clean_order_num, res)
+
     if not _ok(res):
-        logger.error("SSI hủy lệnh thất bại: %s", res)
+        logger.error("SSI hủy lệnh thất bại %s: %s", clean_order_num, res)
         return None
 
-    return res or {"status": "success", "orderNo": str(order_num)}
+    return res or {"status": "success", "orderNo": clean_order_num}
 
 
 # ------------------------------------------------------------------ queries
@@ -339,7 +392,15 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
 
     not_matched = []
     is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all", "calendar_cancel", "cancel_all_buy_orders", "cancel_all_sell_orders")
-    is_all_sides = not side or str(side).upper() == "ALL"
+
+    # Chuẩn hóa chiều lệnh: "BUY"/"B" -> "B", "SELL"/"S" -> "S", "ALL" -> "ALL"
+    side_req = str(side).upper() if side else "ALL"
+    if side_req in ("BUY", "B"):
+        target_side = "B"
+    elif side_req in ("SELL", "S"):
+        target_side = "S"
+    else:
+        target_side = "ALL"
 
     for o in orders:
         order_status = str(_first(o, "orderStatus", "status", default="")).upper()
@@ -347,6 +408,11 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
             continue
 
         o_side = str(_first(o, "side", "buySell", default="")).upper()
+        if o_side in ("BUY", "B"):
+            o_side = "B"
+        elif o_side in ("SELL", "S"):
+            o_side = "S"
+
         o_symbol = str(_first(o, "symbol", "instrumentID", default="")).upper()
         o_qty = int(_num(_first(o, "quantity", default=0)))
         o_filled = int(_num(_first(o, "filledQuantity", "filledQty", default=0)))
@@ -361,8 +427,12 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
         if remain_qty <= 0:
             continue
 
+        order_id = str(_first(o, "orderId", "orderNo", "uniqueID", default=""))
+        if not order_id:
+            continue
+
         item = {
-            "orderNo": str(_first(o, "orderId", "orderNo", "uniqueID")),
+            "orderNo": order_id,
             "side": o_side,
             "symbol": o_symbol,
             "showPrice": _from_vnd(_first(o, "price", default=0)),
@@ -371,7 +441,7 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
         }
 
         symbol_match = is_all_symbols or (o_symbol == str(symbol).upper())
-        side_match = is_all_sides or (o_side == str(side).upper())
+        side_match = (target_side == "ALL") or (o_side == target_side)
 
         if symbol_match and side_match:
             not_matched.append(item)
@@ -391,22 +461,39 @@ def handle_orders_matched(user_account, trade_account, symbol, url, valid_sessio
 
     matched = []
     is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all")
-    is_all_sides = not side or str(side).upper() == "ALL"
+
+    # Chuẩn hóa chiều lệnh
+    side_req = str(side).upper() if side else "ALL"
+    if side_req in ("BUY", "B"):
+        target_side = "B"
+    elif side_req in ("SELL", "S"):
+        target_side = "S"
+    else:
+        target_side = "ALL"
 
     for o in orders:
         o_side = str(_first(o, "side", "buySell", default="")).upper()
+        if o_side in ("BUY", "B"):
+            o_side = "B"
+        elif o_side in ("SELL", "S"):
+            o_side = "S"
+
         o_symbol = str(_first(o, "symbol", "instrumentID", default="")).upper()
         o_filled = int(_num(_first(o, "filledQuantity", "filledQty", default=0)))
 
         if o_filled <= 0:
             continue
 
+        order_id = str(_first(o, "orderId", "orderNo", "uniqueID", default=""))
+        if not order_id:
+            continue
+
         symbol_match = is_all_symbols or (o_symbol == str(symbol).upper())
-        side_match = is_all_sides or (o_side == str(side).upper())
+        side_match = (target_side == "ALL") or (o_side == target_side)
 
         if symbol_match and side_match:
             matched.append({
-                "orderNo": str(_first(o, "orderId", "orderNo", "uniqueID")),
+                "orderNo": order_id,
                 "side": o_side,
                 "symbol": o_symbol,
                 "showPrice": _from_vnd(_first(o, "avgPrice", "price", default=0)),
