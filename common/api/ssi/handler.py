@@ -742,38 +742,61 @@ def _position_metrics(p: dict) -> dict:
     """
     symbol = str(_first(p, "symbol", "instrumentID", "stock_name", default="")).strip().upper()
 
-    # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2, T+3)
-    total_qty_raw = _first(p, 
-        "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
-        "totalHold", "holding", "holdQty", "volume", "totalVol", "vol", 
-        "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
-        "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
-    )
+    # 1. Khối lượng đã về tài khoản (on_hand / quantity)
     on_hand = _num(_first(p, 
         "quantity", "onHand", "balance", "settledQuantity", "settledQty", 
         "tradableQuantity", "tradableQty", "usableQuantity", "usable", default=0
     ))
-    receiving = _num(_first(p, 
-        "receivingQuantity", "receivingQty", "receiving", "waitingQuantity", 
-        "waitingQty", "waitingReceive", "waitingReceiveQuantity", "waiting", 
-        "pendingQuantity", "pendingQty", "pending", "pendingReceive",
-        "enroute", "enrouteQty", "tradeEnroute", "buyWaiting", "buyEnroute", default=0
+    sellable = _num(_first(p, 
+        "sellableQuantity", "sellableQty", "sellable", "available", "availableQty", 
+        "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
+        "tradableQty", "usableQuantity", "usable", default=0
     ))
+
+    # 2. Khối lượng đã bán đang chờ chuyển giao thanh toán (chưa bị trừ khỏi quantity tại VSD)
+    sold_pending = _num(_first(p, "soldQuantity", "soldQty", default=0)) + \
+                   _num(_first(p, "t1SellQuantity", "t1SellQty", default=0)) + \
+                   _num(_first(p, "t2SellQuantity", "t2SellQty", default=0))
+
+    settled_actual = max(0.0, on_hand - sold_pending)
+
+    # 3. Khối lượng mua mới trong ngày hôm nay (T0)
     t0 = _num(_first(p, "boughtQuantity", "buyingQuantity", "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
+
+    # 4. Khối lượng mua chờ về T1, T2, T3
     t1 = _num(_first(p, "t1BuyQuantity", "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
     t2 = _num(_first(p, "t2BuyQuantity", "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
     t3 = _num(_first(p, "t3BuyQuantity", "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
-    t_sum = t0 + t1 + t2 + t3
-    rec_total = receiving if receiving >= t_sum else t_sum
+    t_waiting = t1 + t2 + t3
 
-    if total_qty_raw is not None and _num(total_qty_raw) > 0:
-        qty = _num(total_qty_raw)
+    # Xử lý tránh cộng trùng khi hàng vừa về trong ngày (quantity đã có nhưng t1BuyQuantity/t2BuyQuantity chưa kịp xóa)
+    if on_hand > 0 and t_waiting > 0:
+        if t_waiting == on_hand or t_waiting == sellable:
+            # Lượng t_waiting này chính là lượng vừa về tài khoản thành on_hand/sellable
+            waiting_actual = 0.0
+        elif t_waiting > on_hand:
+            # Có mua thêm nhưng có 1 phần trùng với on_hand vừa về
+            waiting_actual = t_waiting - on_hand
+        else:
+            # Nếu on_hand > t_waiting: kiểm tra nếu t1 hoặc t2 trùng với sellable thì là hàng vừa về
+            waiting_actual = t_waiting if (t1 != sellable and t2 != sellable) else 0.0
     else:
-        qty = on_hand + rec_total
+        waiting_actual = t_waiting
+
+    qty = settled_actual + t0 + waiting_actual
 
     # Fallback khối lượng từ sàn SSI nếu chưa có trong các trường trên
     if qty <= 0:
-        qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
+        total_qty_raw = _first(p, 
+            "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
+            "totalHold", "holding", "holdQty", "volume", "totalVol", "vol", 
+            "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
+            "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
+        )
+        if total_qty_raw is not None and _num(total_qty_raw) > 0:
+            qty = _num(total_qty_raw)
+        elif qty <= 0:
+            qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
 
     sellable = _num(_first(p, 
         "sellableQuantity", "sellableQty", "sellable", "available", "availableQty", 
