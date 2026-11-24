@@ -41,6 +41,18 @@ WEBSITE = 'https://smartone.vps.com.vn'
 
 
 def define_message(type: SignalTelegramEnum, **kwargs):
+    params = kwargs.get("kwargs", {})
+    if isinstance(params, dict) and "percent_in_de" not in params:
+        try:
+            from apps.trading.service.utils import get_percent_in_de
+            params["percent_in_de"] = get_percent_in_de(
+                params.get("stock"),
+                params.get("current_price"),
+                params.get("ref_price")
+            )
+        except Exception:
+            params["percent_in_de"] = "0.00%"
+
     match type:
         case SignalTelegramEnum.NOTIFY_RUNNING.value:
             return NOTIFY_RUNNING.format(**kwargs["kwargs"])

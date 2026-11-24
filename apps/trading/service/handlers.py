@@ -20,7 +20,7 @@ from apps.trading.service.constants import VALID_TIME_REQUEST_BUY, VALID_TIME_RE
 from apps.trading.service.download import download_data, download_sales_volume
 from apps.trading.service.helper import (render_message, round_to_nearest_hundred, should_sell_take_profit, should_take_profit_bolinger, is_valid_time_to_buy, is_valid_time_to_sell,
                                          send_telegram_message, send_telegram_message_batch, should_buy, should_buy_following, should_buy_trading, should_sell, should_sell_trading)
-from apps.trading.service.utils import round_up_to_unit, round_to_unit, revert_status_request_trade
+from apps.trading.service.utils import round_up_to_unit, round_to_unit, revert_status_request_trade, get_percent_in_de
 from apps.telegram.sender import send_message, send_message_telegram
 
 # from apps.balance.services import BalanceService
@@ -927,6 +927,7 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                         'level': level,
                         'start_price': round(start_price, 2),
                         "current_price": round(price_current, 2),
+                        "percent_in_de": get_percent_in_de(stock, price_current),
                         'limit_price': round(start_price - add_price_buy + slippage_buy, 2),
                         'step_price': step_price,
                         "slippage_buy": slippage_buy,
@@ -1589,6 +1590,7 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                     'volume': int(volume),
                     'start_price': round(start_price, 2),
                     "current_price": round(price_current, 2),
+                    "percent_in_de": get_percent_in_de(stock, price_current),
                     'step_price': step_price,
                     "slippage_sell": slippage_sell,
                     "add_price_sell": add_price_sell,
@@ -2062,6 +2064,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                 "stock": stock.name,
                 "level": level,
                 "current_price": round(price_current, 2),
+                "percent_in_de": get_percent_in_de(stock, price_current),
                 "price": price_to_start,
                 "times": 'first',
                 "message": messages_to_buy,
@@ -2193,6 +2196,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                             'start_price': round(start_price, 2),
                             'limit_price': round(start_price - add_price_buy + slippage_buy, 2),
                             "current_price": round(price_current, 2),
+                            "percent_in_de": get_percent_in_de(stock, price_current),
                             'step_price': step_price,
                             "slippage_buy": slippage_buy,
                             "add_price_buy": add_price_buy, 
@@ -2840,6 +2844,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                     'start_price': round(start_price, 2),
                     'limit_price': round(start_price + add_price_sell - slippage_sell, 2),
                     "current_price": round(price_current, 2),
+                    "percent_in_de": get_percent_in_de(stock, price_current),
                     'step_price': step_price,
                     "slippage_sell": slippage_sell,
                     "add_price_sell": add_price_sell,

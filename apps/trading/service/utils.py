@@ -229,3 +229,49 @@ def revert_status_request_trade(user, stock_id, reset_is_trading=True):
                 ConfigurationServices.update_is_trading_configuration(user, stock_id, False)
         except Exception as retry_e:
              logger.error(f"Lỗi khi revert status request trade (Lần 2 - Thất bại): {retry_e}")
+
+def get_percent_in_de(stock, current_price, ref_price=None) -> str:
+    """Tính phần trăm tăng hay giảm của giá hiện tại so với giá tham chiếu.
+    Nếu > 0: +...%
+    Nếu < 0: -...%
+    Nếu == 0: 0.00%
+    """
+    try:
+        cur_p = float(current_price) if current_price is not None else 0.0
+        r_p = float(ref_price) if ref_price is not None else 0.0
+
+        if r_p <= 0 and stock:
+            from apps.stock.models import Stock, StockD1
+            stock_obj = stock if isinstance(stock, Stock) else Stock.objects.filter(name__iexact=str(stock).strip()).first()
+            if stock_obj:
+                last_d1 = StockD1.objects.filter(stock=stock_obj).order_by('-time').first()
+                if last_d1 and last_d1.close and last_d1.close > 0:
+                    r_p = float(last_d1.close)
+                elif last_d1 and last_d1.open and last_d1.open > 0:
+                    r_p = float(last_d1.open)
+
+                if r_p <= 0:
+                    try:
+                        from apps.stock.services import StockService
+                        info = StockService.get_stock_info(stock_obj.name, None)
+                        if info and info.get('basicPrice'):
+                            r_p = float(info['basicPrice'])
+                    except Exception:
+                        pass
+
+        if cur_p > 0 and r_p > 0:
+            if cur_p < 1000 and r_p >= 1000:
+                r_p = r_p / 1000.0
+            elif cur_p >= 1000 and r_p < 1000:
+                r_p = r_p * 1000.0
+
+            diff_pct = (cur_p - r_p) / r_p * 100.0
+            if diff_pct > 0:
+                return f"+{diff_pct:.2f}%"
+            elif diff_pct < 0:
+                return f"{diff_pct:.2f}%"
+            else:
+                return "0.00%"
+    except Exception:
+        pass
+    return "0.00%"
