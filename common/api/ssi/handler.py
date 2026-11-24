@@ -710,15 +710,38 @@ def _lookup_stock_prices(symbol: str) -> tuple:
         if stock_obj:
             if current_price <= 0:
                 last_m1 = StockService.get_last_stock_chart_item_by_time(StockM1, stock_obj.id)
-                if last_m1 and last_m1.get('close'):
-                    current_price = _unit_vnd(last_m1['close'])
+                if last_m1:
+                    close_m1 = getattr(last_m1, 'close', None) if not isinstance(last_m1, dict) else last_m1.get('close')
+                    if close_m1 and float(close_m1) > 0:
+                        current_price = _unit_vnd(close_m1)
+
             # Lấy giá đóng cửa phiên gần nhất làm giá tham chiếu đầu ngày (hoặc giá mở cửa)
             last_d1 = StockD1.objects.filter(stock=stock_obj).order_by('-time').first()
             if last_d1:
-                if last_d1.close and last_d1.close > 0:
-                    ref_price = _unit_vnd(last_d1.close)
-                elif last_d1.open and last_d1.open > 0:
-                    ref_price = _unit_vnd(last_d1.open)
+                close_d1 = getattr(last_d1, 'close', None) if not isinstance(last_d1, dict) else last_d1.get('close')
+                open_d1 = getattr(last_d1, 'open', None) if not isinstance(last_d1, dict) else last_d1.get('open')
+                if close_d1 and float(close_d1) > 0:
+                    ref_price = _unit_vnd(close_d1)
+                elif open_d1 and float(open_d1) > 0:
+                    ref_price = _unit_vnd(open_d1)
+
+            # Nếu current_price vẫn <= 0 mà có ref_price -> dùng ref_price làm current_price
+            if current_price <= 0 and ref_price > 0:
+                current_price = ref_price
+
+            # Thử lấy giá từ StockService.get_stock_info (API / FinInfo) nếu chưa đủ
+            if current_price <= 0 or ref_price <= 0:
+                try:
+                    info = StockService.get_stock_info(stock_obj.name, None)
+                    if info:
+                        match_p = info.get('matchPrice') or info.get('lastPrice') or info.get('closePrice')
+                        basic_p = info.get('basicPrice') or info.get('refPrice') or info.get('referencePrice')
+                        if current_price <= 0 and match_p and float(match_p) > 0:
+                            current_price = _unit_vnd(match_p)
+                        if ref_price <= 0 and basic_p and float(basic_p) > 0:
+                            ref_price = _unit_vnd(basic_p)
+                except Exception:
+                    pass
 
             from apps.configuration.details.models import Configuration
             from apps.configuration.type.services import ConfigurationTypeServices
@@ -726,9 +749,13 @@ def _lookup_stock_prices(symbol: str) -> tuple:
             cfg = Configuration.objects.filter(stock=stock_obj, config_type=overview_type.id).first()
             if cfg and cfg.price_to_buy_now and cfg.price_to_buy_now > 0:
                 cost_price = _unit_vnd(cfg.price_to_buy_now)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("SSI _lookup_stock_prices: lỗi tra cứu %s: %s", sym, e)
 
+    if current_price <= 0 and ref_price > 0:
+        current_price = ref_price
+    if ref_price <= 0 and current_price > 0:
+        ref_price = current_price
     if ref_price <= 0 and cost_price > 0:
         ref_price = cost_price
 
@@ -956,12 +983,14 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
 
     positions = []
     summary = {}
+    cost_total = 0.0
     try:
         positions, summary = _get_positions_and_summary(account)
         pm = [_position_metrics(p) for p in positions]
         market_value = sum(m["market_value"] for m in pm)
         gain_loss_total = sum(m["gain_loss"] for m in pm)
         gain_loss_oneday_total = sum(m["gain_loss_oneday"] for m in pm)
+        cost_total = sum(m["avg_price"] * m["quantity"] for m in pm if m.get("avg_price") and m.get("quantity"))
 
         # Bổ sung từ summary nếu từng vị thế chưa có hoặc summary có giá trị
         if summary:
@@ -974,18 +1003,18 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
             mv_summary = _first(summary, "totalMarketValue", "marketValue", default=None)
             if mv_summary is not None and not market_value:
                 market_value = _num(mv_summary)
-
-        # if positions and not market_value:
-        #     logger.warning("SSI position không có giá thị trường, các khóa nhận được: %s",
-        #                    sorted(positions[0].keys()))
     except Exception as e:
         logger.warning("SSI validate: lỗi tính vị thế: %s", e)
-        market_value = gain_loss_total = gain_loss_oneday_total = 0
+        market_value = gain_loss_total = gain_loss_oneday_total = cost_total = 0
 
-    # accountBalance (SSI) = tiền mặt trong tài khoản; withdrawable = tiền rút được.
     # lmv (từ ppmmrAccount) = giá trị thị trường các mã đang nắm giữ -> dùng khi /position không có giá.
-    if not market_value:
-        market_value = _num(_first(cash, "lmv", default=0))
+    lmv = _num(_first(cash, "lmv", default=0))
+    if not market_value and lmv > 0:
+        market_value = lmv
+
+    # Fallback lãi lỗ danh mục nếu chưa có mà đã có market_value và cost_total
+    if not gain_loss_total and market_value > 0 and cost_total > 0:
+        gain_loss_total = market_value - cost_total
 
     # Fallback lãi lỗ từ tổng vốn chờ về (buyT0, buyT1, buyT2) nếu SSI position không trả
     if not gain_loss_total and market_value:
