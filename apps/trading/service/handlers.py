@@ -403,7 +403,7 @@ def update_sell_order(user_name: str, account: str, symbol: str, request_url: st
                     continue
 
                 # Nếu update_price chưa bé hơn limited_price thì handle update order
-                if update_price > limited_price:
+                if update_price > limited_price and update_price > 0:
                     res_update_order = execute_action_with_retry(
                         handle_update_order_service,
                         user_name, account, request_url, symbol, session, '', order_num, old_price, update_price, update_volume, ref_id, 'S',
@@ -422,7 +422,9 @@ def update_sell_order(user_name: str, account: str, symbol: str, request_url: st
                             'update_price': update_price,
                             'volume': update_volume,
                             'status': 'Chưa khớp'
-                        })            
+                        })
+                    else:
+                        logger.error(f"⚠️ {symbol}: Lỗi API không thể cập nhật giá lệnh bán {order_num}.")
                 else:
                     logger.info(f'Huy lenh vi gia update: {update_price} da toi limited: {limited_price}')
                     res_cancel_order = execute_action_with_retry(
@@ -439,6 +441,8 @@ def update_sell_order(user_name: str, account: str, symbol: str, request_url: st
                             'volume': update_volume,
                             'status': 'Đã hủy'
                         })
+                    else:
+                        logger.error(f"⚠️ {symbol}: Lỗi API không thể hủy lệnh bán {order_num} khi vượt giới hạn giá.")
             except Exception as e:
                 logger.error(f"Lỗi khi xử lý sửa lệnh đơn lẻ {symbol}: {e}")
     else: 
@@ -2074,7 +2078,7 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
             if is_buy_following and not is_buy:
                 send_telegram_message(user, MessageTypeEnum.OVERALL, status_signal=status_buy, **buy_attrs)
             
-            if symbol in ['VND', 'PVS','TPB', 'VIB', 'TCB', 'HPB', 'EIB']:
+            if symbol in ['VND', 'PVS','TPB', 'VIB', 'TCB', 'EIB']:
                 send_telegram_message(user, MessageTypeEnum.OVERALL, status_signal=status_buy, **buy_attrs)
             is_send_order_buy = False   
             if status_buy == SignalTelegramEnum.BUY_SUCCESS:
@@ -2869,7 +2873,8 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                             'volume': int(volume_sell_sensitive)
                         }
                         res_sell = handle_sell_service(user_name, account, request_url, symbol, session, asp_net_session, sell_order_attrs_send['price'],  sell_order_attrs_send['volume'], ref_id)
-                        if res_sell:
+                        logger.info(f"[{symbol}] [Auto] KẾT QUẢ GỌI handle_sell_service (Lệnh bán nhạy cảm): {res_sell}")
+                        if res_sell and res_sell.get('order_num'):
                             is_send_order_sell = True
                             sell_order_sensitive_attrs = {
                                 'stock': res_sell['symbol'],
@@ -2882,8 +2887,10 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                             volume -= int(res_sell['volume'])
                             current_batch_order_nums.append(res_sell['order_num'])
                             number_order -= 1
+                            logger.info(f"[{symbol}] [Auto] Đặt lệnh bán nhạy cảm THÀNH CÔNG -> OrderID: {res_sell.get('order_num')}")
                         else:
-                            logger.info(f"Error: lệnh bán nhạy cảm handle_sell_service  của {symbol} phản hồi là rỗng") 
+                            error_msg = res_sell.get('error') if (res_sell and isinstance(res_sell, dict)) else "API không phản hồi"
+                            logger.info(f"[{symbol}] [Auto] Lệnh bán nhạy cảm handle_sell_service thất bại: {error_msg}")
                 # Chia đều phần còn lại của volume to sell
                 if volume >= 100:
                     number_order = min(number_order, volume // 100)
@@ -2901,7 +2908,8 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                             price = round(ceil_price, 2)
                         if volume_sell >= 100:
                             res_sell = handle_sell_service(user_name, account, request_url, symbol, session, asp_net_session, price,  volume_sell, ref_id)
-                            if res_sell:
+                            logger.info(f"[{symbol}] [Auto] KẾT QUẢ GỌI handle_sell_service (Lệnh bán lần {i+1}): {res_sell}")
+                            if res_sell and res_sell.get('order_num'):
                                 is_send_order_sell = True
                                 sell_order_details_attrs = {
                                     'stock': res_sell['symbol'],
@@ -2912,8 +2920,10 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                                 sell_messages.append({'status_signal': SignalTelegramEnum.SELL_ORDER_DETAIL,
                                                     **sell_order_details_attrs })
                                 current_batch_order_nums.append(res_sell['order_num'])
+                                logger.info(f"[{symbol}] [Auto] Đặt lệnh bán lần {i+1} THÀNH CÔNG -> OrderID: {res_sell.get('order_num')}")
                             else:
-                                logger.info(f"Error: lệnh bán lần thứ {i+1} hàm handle_sell_service của {symbol} thất bại") 
+                                error_msg = res_sell.get('error') if (res_sell and isinstance(res_sell, dict)) else "API không phản hồi"
+                                logger.info(f"[{symbol}] [Auto] Lệnh bán lần thứ {i+1} hàm handle_sell_service thất bại: {error_msg}")
                 # Send telegram tổng hợp khi thực hiện đặt xong các lệnh bán
                 if is_send_order_sell:
                     if status_sell == SignalTelegramEnum.TAKEPROFIT: 
@@ -2934,12 +2944,12 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
                 interval_check = 10  # kiểm tra mỗi 10 giây
                 should_break_loop = False  # Flag để thoát khỏi vòng for                
                 is_matched_all = False
-                for i in range(int(limited_times) - 1):
+                for i in range(int(limited_times)):
                     if should_break_loop:
                         break
                     start_sleep = time.time()
                     while time.time() - start_sleep < sleeping_time_sell:
-                        connection.close()
+                        # connection.close()  # Close connection before sleep (Bỏ đi để tránh DB deadlock)
                         
                         remaining = sleeping_time_sell - (time.time() - start_sleep)
                         sleep_time = min(interval_check, remaining)
