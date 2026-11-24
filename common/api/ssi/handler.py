@@ -740,6 +740,8 @@ def _position_metrics(p: dict) -> dict:
 
     Trả về: quantity, sellable, price, avg_price, market_value, gain_loss, gain_loss_oneday, gain_loss_pct.
     """
+    symbol = str(_first(p, "symbol", "instrumentID", "stock_name", default="")).strip().upper()
+
     # 1. Tính tổng khối lượng nắm giữ (bao gồm cả cổ phiếu đang về T+0, T+1, T+2, T+3)
     total_qty_raw = _first(p, 
         "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
@@ -747,25 +749,26 @@ def _position_metrics(p: dict) -> dict:
         "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
         "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
     )
+    on_hand = _num(_first(p, 
+        "quantity", "onHand", "balance", "settledQuantity", "settledQty", 
+        "tradableQuantity", "tradableQty", "usableQuantity", "usable", default=0
+    ))
+    receiving = _num(_first(p, 
+        "receivingQuantity", "receivingQty", "receiving", "waitingQuantity", 
+        "waitingQty", "waitingReceive", "waitingReceiveQuantity", "waiting", 
+        "pendingQuantity", "pendingQty", "pending", "pendingReceive",
+        "enroute", "enrouteQty", "tradeEnroute", "buyWaiting", "buyEnroute", default=0
+    ))
+    t0 = _num(_first(p, "boughtQuantity", "buyingQuantity", "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
+    t1 = _num(_first(p, "t1BuyQuantity", "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
+    t2 = _num(_first(p, "t2BuyQuantity", "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
+    t3 = _num(_first(p, "t3BuyQuantity", "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
+    t_sum = t0 + t1 + t2 + t3
+    rec_total = receiving if receiving >= t_sum else t_sum
+
     if total_qty_raw is not None and _num(total_qty_raw) > 0:
         qty = _num(total_qty_raw)
     else:
-        on_hand = _num(_first(p, 
-            "quantity", "onHand", "balance", "settledQuantity", "settledQty", 
-            "tradableQuantity", "tradableQty", "usableQuantity", "usable", default=0
-        ))
-        receiving = _num(_first(p, 
-            "receivingQuantity", "receivingQty", "receiving", "waitingQuantity", 
-            "waitingQty", "waitingReceive", "waitingReceiveQuantity", "waiting", 
-            "pendingQuantity", "pendingQty", "pending", "pendingReceive",
-            "enroute", "enrouteQty", "tradeEnroute", "buyWaiting", "buyEnroute", default=0
-        ))
-        t0 = _num(_first(p, "boughtQuantity", "buyingQuantity", "buyT0", "t0", "t0Quantity", "t0Qty", default=0))
-        t1 = _num(_first(p, "t1BuyQuantity", "buyT1", "t1", "t1Quantity", "t1Qty", default=0))
-        t2 = _num(_first(p, "t2BuyQuantity", "buyT2", "t2", "t2Quantity", "t2Qty", default=0))
-        t3 = _num(_first(p, "t3BuyQuantity", "buyT3", "t3", "t3Quantity", "t3Qty", default=0))
-        t_sum = t0 + t1 + t2 + t3
-        rec_total = receiving if receiving >= t_sum else t_sum
         qty = on_hand + rec_total
 
     # Fallback khối lượng từ sàn SSI nếu chưa có trong các trường trên
@@ -777,6 +780,13 @@ def _position_metrics(p: dict) -> dict:
         "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
         "tradableQty", "usableQuantity", "usable", default=0
     ))
+
+    if symbol:
+        logger.info(
+            f"[SSI POSITION] Mã: {symbol} | t1BuyQuantity: {int(t1)} | t2BuyQuantity: {int(t2)} | "
+            f"boughtQuantity(T0): {int(t0)} | quantity(onHand): {int(on_hand)} | "
+            f"sellableQuantity: {int(sellable)} | Tổng nắm giữ (actual_vol): {int(qty)}"
+        )
     price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
                              "matchPrice", "price", default=0))
     avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))
@@ -828,6 +838,7 @@ def _position_metrics(p: dict) -> dict:
         "quantity": qty, "sellable": sellable, "price": price, "avg_price": avg,
         "market_value": market_value, "gain_loss": gain_loss,
         "gain_loss_oneday": gain_loss_oneday, "gain_loss_pct": gain_pct,
+        "t1_buy_vol": t1, "t2_buy_vol": t2, "t0_buy_vol": t0, "on_hand": on_hand,
     }
 
 
@@ -878,7 +889,14 @@ def handle_stock_balance_service(user_account, trade_account, symbol, url, sessi
                 "value": m["market_value"],
                 "percentage_loss": m["gain_loss_pct"],
                 "value_loss": m["gain_loss"],
+                "t1_buy_vol": m.get("t1_buy_vol", 0),
+                "t2_buy_vol": m.get("t2_buy_vol", 0),
             }
+            logger.info(
+                f"[SSI STOCK BALANCE] {symbol} (TK {trade_account}): actual_vol={stock_balance['actual_vol']}, "
+                f"available_vol={stock_balance['available_vol']}, t1BuyQuantity={stock_balance['t1_buy_vol']}, "
+                f"t2BuyQuantity={stock_balance['t2_buy_vol']}"
+            )
             break
 
     return {
@@ -941,9 +959,9 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
             if mv_summary is not None and not market_value:
                 market_value = _num(mv_summary)
 
-        if positions and not market_value:
-            logger.warning("SSI position không có giá thị trường, các khóa nhận được: %s",
-                           sorted(positions[0].keys()))
+        # if positions and not market_value:
+        #     logger.warning("SSI position không có giá thị trường, các khóa nhận được: %s",
+        #                    sorted(positions[0].keys()))
     except Exception as e:
         logger.warning("SSI validate: lỗi tính vị thế: %s", e)
         market_value = gain_loss_total = gain_loss_oneday_total = 0
