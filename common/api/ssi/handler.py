@@ -780,13 +780,6 @@ def _position_metrics(p: dict) -> dict:
         "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
         "tradableQty", "usableQuantity", "usable", default=0
     ))
-
-    if symbol:
-        logger.info(
-            f"[SSI POSITION] Mã: {symbol} | t1BuyQuantity: {int(t1)} | t2BuyQuantity: {int(t2)} | "
-            f"boughtQuantity(T0): {int(t0)} | quantity(onHand): {int(on_hand)} | "
-            f"sellableQuantity: {int(sellable)} | Tổng nắm giữ (actual_vol): {int(qty)}"
-        )
     price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
                              "matchPrice", "price", default=0))
     avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))

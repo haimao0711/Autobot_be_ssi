@@ -200,13 +200,26 @@ class ConfigurationOverviewServices:
                                 continue
                             if m['quantity'] <= 0 and m['sellable'] <= 0 and m['avg_price'] <= 0:
                                 continue
+                            sym_str = str(symbol).strip().upper()
+                            t1_vol = int(m.get('t1_buy_vol', 0))
+                            t2_vol = int(m.get('t2_buy_vol', 0))
+                            logger.info(
+                                f"[/api/config/stock] Vị thế thực tế từ sàn SSI -> Mã: {sym_str} | "
+                                f"volume_buy (actual_vol): {int(m['quantity'])} | "
+                                f"volume_trade (avaiable_vol): {int(m['sellable'])} | "
+                                f"t1BuyQuantity: {t1_vol} | t2BuyQuantity: {t2_vol} | "
+                                f"avg_price: {ssi_handler._from_vnd(m['avg_price'])} | "
+                                f"gain_loss: {round(m['gain_loss_pct'], 2)}%"
+                            )
                             stock_balance_data.append({
-                                'symbol': str(symbol).strip().upper(),
+                                'symbol': sym_str,
                                 'actual_vol': int(m['quantity']),
                                 'avaiable_vol': int(m['sellable']),
                                 'avg_price': ssi_handler._from_vnd(m['avg_price']),
                                 'gain_loss_per': round(m['gain_loss_pct'], 2),
                                 'market_price': ssi_handler._from_vnd(m['price']),
+                                't1_buy_vol': t1_vol,
+                                't2_buy_vol': t2_vol,
                             })
                         if stock_balance_data:
                             ssi_cache.set(cache_key_pos, json.dumps(stock_balance_data), timeout=15)
@@ -232,6 +245,14 @@ class ConfigurationOverviewServices:
                 # Tính % lãi lỗ thực tế từ giá thị trường và giá vốn nhận từ sàn
                 if (not profit or profit == 0) and aver_price > 0 and current_price > 0:
                     profit = round((current_price - aver_price) / aver_price * 100, 2)
+
+                if vol_buy > 0 or vol_trade > 0 or aver_price > 0:
+                    logger.info(
+                        f"[/api/config/stock] Frontend hiển thị -> Mã: {stock_name} | "
+                        f"volume_buy: {vol_buy} | volume_trade: {vol_trade} | "
+                        f"aver_price_buy: {aver_price} | current_price: {current_price} | "
+                        f"current_profit: {profit}%"
+                    )
 
                 return {
                     'account_vps': account_name,

@@ -858,12 +858,6 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                 stock_balance = res_stock_balance.get('stock_balance', {}).get('actual_vol', 0) if res_stock_balance else 0
                 number_stock_existing = res_stock_balance.get('number_stock_existing', 0) if res_stock_balance else 0
                 floor_price = res_stock_balance.get('stock_balance', {}).get('floor_price', 0) if res_stock_balance else 0
-                logger.info(
-                    f"[{symbol}] [Mua tay] Vị thế: actual_vol={stock_balance}, "
-                    f"available_vol={res_stock_balance.get('stock_balance', {}).get('available_vol', 0) if res_stock_balance else 0}, "
-                    f"t1BuyQuantity={res_stock_balance.get('stock_balance', {}).get('t1_buy_vol', 0) if res_stock_balance else 0}, "
-                    f"t2BuyQuantity={res_stock_balance.get('stock_balance', {}).get('t2_buy_vol', 0) if res_stock_balance else 0}"
-                )
                 
                 # Fetch total_market_value & purchasing power
                 is_valid_session, session_result = validate_session(user_name, account, request_url, session, asp_net_session)
@@ -1931,9 +1925,6 @@ def process_trading(prepared: dict, user: User, vnindex_stock: any, vps_account:
             
         volume_stock_balance = res_stock_balance.get('stock_balance', {}).get('actual_vol', 0)
         volume_balance_trade = res_stock_balance.get('stock_balance', {}).get('available_vol', 0)
-        t1_vol = res_stock_balance.get('stock_balance', {}).get('t1_buy_vol', 0)
-        t2_vol = res_stock_balance.get('stock_balance', {}).get('t2_buy_vol', 0)
-        logger.info(f"[{symbol}] [Process Trading] Vị thế: actual_vol={volume_stock_balance}, available_vol={volume_balance_trade}, t1BuyQuantity={t1_vol}, t2BuyQuantity={t2_vol}")
         ceil_price = res_stock_balance.get('stock_balance', {}).get('ceil_price', 0)
         floor_price = res_stock_balance.get('stock_balance', {}).get('floor_price', 0)
         symbols_existing = res_stock_balance.get('symbols_existing', [])
