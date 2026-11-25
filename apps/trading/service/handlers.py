@@ -666,6 +666,11 @@ def process_buy_request(prepared: dict, user: User, vnindex_stock: any, vps_acco
                     "start_time_order": start_time_order,
                 }
                 send_telegram_message(user, MessageTypeEnum.OVERALL, status_signal=status_buy, **buy_attrs)
+            else:
+                logger.info(f'Xu ly lenh mua tay theo chart {symbol} ')
+                msg_start = f'🔔 **Tài khoản {account}**: Yêu cầu mua theo chart cổ phiếu **{symbol}** bắt đầu thực hiện!'
+                send_message_telegram(user, MessageTypeEnum.OVERALL, msg_start)
+                send_message_telegram(user, MessageTypeEnum.ACT, msg_start)
 
             while is_use_chart_action and datetime.now() < end_time:
                 close_old_connections()
@@ -1390,6 +1395,11 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                     "start_time_order": start_time_order,
                 }
                 send_telegram_message(user, MessageTypeEnum.OVERALL, status_signal=status_sell, **sell_attrs) 
+            else:
+                logger.info(f'Xu ly lenh ban tay theo chart {symbol}')
+                msg_start = f'🔔 **Tài khoản {account}**: Yêu cầu bán theo chart cổ phiếu **{symbol}** bắt đầu thực hiện!'
+                send_message_telegram(user, MessageTypeEnum.OVERALL, msg_start)
+                send_message_telegram(user, MessageTypeEnum.ACT, msg_start)
 
             while is_use_chart_action and datetime.now() < end_time:
                 close_old_connections()
@@ -1468,6 +1478,20 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                     messages_to_sell = render_message(
                         sell_reason, trading_chart_value=trading_candle_sell, trading_chart_value_second=trading_candle_sell_second, following_chart_type=following_candle_sell, following_chart_type_second=following_candle_sell_second
                     )
+                    time_now = datetime.now(timezone)
+                    start_time_order = time_now.strftime("%H:%M:%S ngày %d-%m-%Y")
+
+                    sell_attrs = {
+                        "user_account": account,
+                        "platform_trading": "SSI FastConnect v3",
+                        "stock": stock.name,
+                        "volume": 0,
+                        "price": price_to_start,
+                        "message": messages_to_sell,
+                        "start_time_order": start_time_order,
+                    }
+
+                    send_telegram_message(user, MessageTypeEnum.OVERALL, status_signal=status_sell, **sell_attrs)
 
                     if status_sell == SignalTelegramEnum.SELL_REQUEST_SUCCESS:              
                         logger.info('Dừng vòng lặp do điều kiện bán thỏa mãn.')
