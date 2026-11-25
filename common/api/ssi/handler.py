@@ -702,12 +702,46 @@ def _lookup_stock_prices(symbol: str) -> tuple:
     except Exception:
         pass
 
-    # 2. Tra cứu từ database (Stock, StockM1, StockD1, Configuration)
+    # 2. Tra cứu từ database (Stock, StockM1, StockD1, Configuration) và FinInfo / StockService
     try:
         from apps.stock.models import Stock, StockM1, StockD1
         from apps.stock.services import StockService
         stock_obj = Stock.objects.filter(name__iexact=sym).first()
         if stock_obj:
+            # 2.1 Ưu tiên lấy giá tham chiếu (basicPrice) và giá khớp (matchPrice) từ StockService.get_stock_info
+            try:
+                info = StockService.get_stock_info(stock_obj.name, None)
+                if info:
+                    basic_p = info.get('basicPrice') or info.get('refPrice') or info.get('referencePrice')
+                    if basic_p and float(basic_p) > 0:
+                        ref_price = _unit_vnd(basic_p)
+                    match_p = info.get('matchPrice') or info.get('lastPrice') or info.get('closePrice')
+                    if current_price <= 0 and match_p and float(match_p) > 0:
+                        current_price = _unit_vnd(match_p)
+            except Exception:
+                pass
+
+            # 2.2 Nếu chưa có ref_price từ API, tra cứu từ nến D1 phiên trước
+            if ref_price <= 0:
+                d1_qs = StockD1.objects.filter(stock=stock_obj).order_by('-time')
+                now_date = datetime.now().date()
+                for d1_item in d1_qs[:3]:
+                    d1_time = getattr(d1_item, 'time', None)
+                    d1_date = d1_time.date() if hasattr(d1_time, 'date') else None
+                    # Nếu là nến của phiên trước (trước ngày hôm nay), lấy giá đóng cửa làm tham chiếu
+                    if d1_date and d1_date < now_date:
+                        close_d1 = getattr(d1_item, 'close', None) if not isinstance(d1_item, dict) else d1_item.get('close')
+                        if close_d1 and float(close_d1) > 0:
+                            ref_price = _unit_vnd(close_d1)
+                            break
+                # Fallback nếu không xác định được ngày: lấy nến D1 đầu tiên
+                if ref_price <= 0 and d1_qs.exists():
+                    first_d1 = d1_qs.first()
+                    close_d1 = getattr(first_d1, 'close', None) if not isinstance(first_d1, dict) else first_d1.get('close')
+                    if close_d1 and float(close_d1) > 0:
+                        ref_price = _unit_vnd(close_d1)
+
+            # 2.3 Lấy giá hiện tại từ nến M1 mới nhất nếu chưa có
             if current_price <= 0:
                 last_m1 = StockService.get_last_stock_chart_item_by_time(StockM1, stock_obj.id)
                 if last_m1:
@@ -715,33 +749,9 @@ def _lookup_stock_prices(symbol: str) -> tuple:
                     if close_m1 and float(close_m1) > 0:
                         current_price = _unit_vnd(close_m1)
 
-            # Lấy giá đóng cửa phiên gần nhất làm giá tham chiếu đầu ngày (hoặc giá mở cửa)
-            last_d1 = StockD1.objects.filter(stock=stock_obj).order_by('-time').first()
-            if last_d1:
-                close_d1 = getattr(last_d1, 'close', None) if not isinstance(last_d1, dict) else last_d1.get('close')
-                open_d1 = getattr(last_d1, 'open', None) if not isinstance(last_d1, dict) else last_d1.get('open')
-                if close_d1 and float(close_d1) > 0:
-                    ref_price = _unit_vnd(close_d1)
-                elif open_d1 and float(open_d1) > 0:
-                    ref_price = _unit_vnd(open_d1)
-
-            # Nếu current_price vẫn <= 0 mà có ref_price -> dùng ref_price làm current_price
+            # 2.4 Nếu current_price vẫn <= 0 mà có ref_price -> dùng ref_price làm current_price
             if current_price <= 0 and ref_price > 0:
                 current_price = ref_price
-
-            # Thử lấy giá từ StockService.get_stock_info (API / FinInfo) nếu chưa đủ
-            if current_price <= 0 or ref_price <= 0:
-                try:
-                    info = StockService.get_stock_info(stock_obj.name, None)
-                    if info:
-                        match_p = info.get('matchPrice') or info.get('lastPrice') or info.get('closePrice')
-                        basic_p = info.get('basicPrice') or info.get('refPrice') or info.get('referencePrice')
-                        if current_price <= 0 and match_p and float(match_p) > 0:
-                            current_price = _unit_vnd(match_p)
-                        if ref_price <= 0 and basic_p and float(basic_p) > 0:
-                            ref_price = _unit_vnd(basic_p)
-                except Exception:
-                    pass
 
             from apps.configuration.details.models import Configuration
             from apps.configuration.type.services import ConfigurationTypeServices
@@ -756,8 +766,6 @@ def _lookup_stock_prices(symbol: str) -> tuple:
         current_price = ref_price
     if ref_price <= 0 and current_price > 0:
         ref_price = current_price
-    if ref_price <= 0 and cost_price > 0:
-        ref_price = cost_price
 
     return current_price, cost_price, ref_price
 
@@ -843,7 +851,7 @@ def _position_metrics(p: dict) -> dict:
         if avg <= 0 and cost_p > 0:
             avg = cost_p
         if ref_p <= 0:
-            ref_p = avg if avg > 0 else price
+            ref_p = price if price > 0 else avg
 
     mv_raw = _first(p, "marketValue", "mktValue", "currentValue", "totalMarketValue", default=None)
     market_value = _num(mv_raw) if mv_raw is not None else qty * price
@@ -863,8 +871,6 @@ def _position_metrics(p: dict) -> dict:
         gain_loss_oneday = _num(gl1_raw)
     elif ref_p > 0 and price > 0 and qty > 0 and abs(price - ref_p) > 0.001:
         gain_loss_oneday = (price - ref_p) * qty
-    elif avg > 0 and price > 0 and qty > 0 and abs(price - avg) > 0.001:
-        gain_loss_oneday = (price - avg) * qty
     else:
         gain_loss_oneday = 0.0
 
@@ -1021,10 +1027,6 @@ def validate_session(user_account, trade_account, url, session, asp_net_session,
         wait_cost = _num(_first(cash, "buyT0", default=0)) + _num(_first(cash, "buyT1", default=0)) + _num(_first(cash, "buyT2", default=0))
         if wait_cost > 0:
             gain_loss_total = market_value - wait_cost
-
-    # Fallback lãi lỗ ngày nếu chưa có mà đã có lãi lỗ tổng
-    if not gain_loss_oneday_total and gain_loss_total:
-        gain_loss_oneday_total = gain_loss_total
 
     withdrawable = _num(_first(cash, "withdrawable", "cashBalance", "cashBal", "eeCash", default=0))
     account_bal = _num(_first(cash, "accountBalance", "totalAssets", "totalAsset", "totalEquity", "cashBal", default=0))
