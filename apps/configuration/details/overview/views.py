@@ -104,25 +104,26 @@ class ConfigurationOverviewRequestViews(APIView):
             is_use_chart_action = request.data.get('is_use_chart_action')
             data_update = {
                 'stock_id': request.data.get('stock_id'),
+                'stock_name': request.data.get('stock_name'),
                 'is_buy_hand': request.data.get('is_buy_hand'),
                 'is_sell_hand': request.data.get('is_sell_hand')
             }       
+            status_code, response_data = ConfigurationOverviewServices.update_a_overview_configuration(
+                user=user,
+                update_overview_data=data_update
+            )
+            if status_code != SuccessType.UPDATED_SUCCESS:
+                return Response(
+                    {"error": "Cập nhật thất bại", "details": response_data},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             is_trading_request = TradingViews.request_trading(user, stock_id=stock_id, symbol=symbol, request_buy=True, request_sell=False, volume_sell='', is_use_chart_action=is_use_chart_action)
             if is_trading_request:
-                status_code, response_data = ConfigurationOverviewServices.update_a_overview_configuration(
-                    user=user,
-                    update_overview_data=data_update
+                return Response(
+                    {"data": response_data},
+                    status=status.HTTP_200_OK
                 )
-                if status_code == SuccessType.UPDATED_SUCCESS:
-                    return Response(
-                        {"data": response_data},
-                        status=status.HTTP_200_OK
-                    )
-                else:
-                    return Response(
-                        {"error": "Cập nhật thất bại", "details": response_data},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
             else:
                 ConfigurationOverviewRequestViews.stop_request_trade(user, stock_id)
                 return Response(
@@ -145,25 +146,26 @@ class ConfigurationOverviewRequestViews(APIView):
             is_use_chart_action = request.data.get('is_use_chart_action')
             data_update = {
                 'stock_id': request.data.get('stock_id'),
+                'stock_name': request.data.get('stock_name'),
                 'is_buy_hand': request.data.get('is_buy_hand'),
                 'is_sell_hand': request.data.get('is_sell_hand')
             }
+            status_code, response_data = ConfigurationOverviewServices.update_a_overview_configuration(
+                user=user,
+                update_overview_data=data_update
+            )
+            if status_code != SuccessType.UPDATED_SUCCESS:
+                return Response(
+                    {"error": "Cập nhật thất bại", "details": response_data},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             is_trading_request = TradingViews.request_trading(user, stock_id=stock_id, symbol=symbol, request_buy=False, request_sell=True, volume_sell=volume_sell, is_use_chart_action=is_use_chart_action)
             if is_trading_request:
-                status_code, response_data = ConfigurationOverviewServices.update_a_overview_configuration(
-                    user=user,
-                    update_overview_data=data_update
+                return Response(
+                    {"data": response_data},
+                    status=status.HTTP_200_OK
                 )
-                if status_code == SuccessType.UPDATED_SUCCESS:
-                    return Response(
-                        {"data": response_data},
-                        status=status.HTTP_200_OK
-                    )
-                else:
-                    return Response(
-                        {"error": "Cập nhật thất bại", "details": response_data},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
             else:
                 ConfigurationOverviewRequestViews.stop_request_trade(user, stock_id)
                 return Response(
