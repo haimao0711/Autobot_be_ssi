@@ -1296,6 +1296,7 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
         status_sell = SignalTelegramEnum.SELL_REQUEST_FAILED
         last_buy_check_time = None  # Dùng để giới hạn việc kiểm tra bán mỗi 60 giây
         message_stop_sell = 'Hết thời gian của lệnh bán tay'
+        messages_to_sell = 'Bán tay'
         price_to_start = None  # Khởi tạo giá trị mặc định
         is_update_success = False # Flag để kiểm tra xem đã lock thành công chưa
         vnindex_data_trading_second = None
@@ -1584,8 +1585,8 @@ def process_sell_request(prepared: dict, user: User, vnindex_stock: any, vps_acc
                     "platform_trading": "SSI FastConnect v3",
                     "stock": stock.name,
                     "volume": volume,
-                    "price": price_set_sell,
-                    "message": "Yêu cầu bán tay thành công, bắt đầu đặt lệnh...",
+                    "price": price_to_start if price_to_start is not None else price_set_sell,
+                    "message": messages_to_sell,
                     "start_time_order": start_time_order,
                 }
                 sell_order_overrall_attrs = {
@@ -3225,6 +3226,7 @@ def trading(user: User, vps_account: Account, symbol: str) -> None:
     if not is_valid_session:
         logger.error(f"[{user.username}] Session không hợp lệ khi chạy job trading tổng quát.")
         send_message_telegram(user, MessageTypeEnum.OVERALL, f"⚠️ **Thông báo**: Session SSI đã hết hạn. Bot không thể kiểm tra số dư và thực hiện trading tự động.")
+        send_message_telegram(user, MessageTypeEnum.ACT, f"⚠️ **Thông báo**: Session SSI đã hết hạn. Bot không thể kiểm tra số dư và thực hiện trading tự động.")
         return
         
     current_total_market_value = session_result.get("total_market_value", 0)
