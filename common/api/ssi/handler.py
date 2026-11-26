@@ -780,13 +780,14 @@ def _position_metrics(p: dict) -> dict:
     # 1. Khối lượng đã về tài khoản (on_hand / quantity)
     on_hand = _num(_first(p, 
         "quantity", "onHand", "balance", "settledQuantity", "settledQty", 
-        "tradableQuantity", "tradableQty", "usableQuantity", "usable", default=0
+        "usableQuantity", "usable", default=0
     ))
     sellable = _num(_first(p, 
         "sellableQuantity", "sellableQty", "sellable", "available", "availableQty", 
-        "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
-        "tradableQty", "usableQuantity", "usable", default=0
+        "availableQuantity", "avaiable_vol", "volume_trade", "usableQuantity", "usable", default=0
     ))
+    if sellable <= 0:
+        sellable = _num(_first(p, "tradableQuantity", "tradableQty", default=0))
 
     # 2. Khối lượng đã bán đang chờ chuyển giao thanh toán (chưa bị trừ khỏi quantity tại VSD)
     sold_pending = _num(_first(p, "soldQuantity", "soldQty", default=0)) + \
@@ -820,24 +821,26 @@ def _position_metrics(p: dict) -> dict:
 
     qty = settled_actual + t0 + waiting_actual
 
-    # Fallback khối lượng từ sàn SSI nếu chưa có trong các trường trên
-    if qty <= 0:
-        total_qty_raw = _first(p, 
-            "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
-            "totalHold", "holding", "holdQty", "volume", "totalVol", "vol", 
-            "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
-            "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
-        )
-        if total_qty_raw is not None and _num(total_qty_raw) > 0:
-            qty = _num(total_qty_raw)
-        elif qty <= 0:
-            qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
+    # Tổng khối lượng từ trường tổng của sàn SSI (nếu có)
+    total_qty_raw = _first(p, 
+        "totalQuantity", "totalQty", "holdingQuantity", "holdingQty", "total", 
+        "totalHold", "holding", "holdQty", "volume", "totalVol", "vol", 
+        "actual_vol", "volume_buy", "longQty", "net", "secQty", "shareQty",
+        "shares", "totalShares", "qtty", "matchQty", "execQty", default=None
+    )
+    if total_qty_raw is not None and _num(total_qty_raw) > 0:
+        qty = max(qty, _num(total_qty_raw))
+    elif qty <= 0:
+        qty = _num(_first(p, "longQty", "net", "actual_vol", "volume_buy", "secBalance", "shareBalance", default=0))
 
-    sellable = _num(_first(p, 
-        "sellableQuantity", "sellableQty", "sellable", "available", "availableQty", 
-        "availableQuantity", "avaiable_vol", "volume_trade", "tradableQuantity", 
-        "tradableQty", "usableQuantity", "usable", default=0
-    ))
+    # Đảm bảo tính nhất quán logic: Khối lượng bán được (sellable) không bao giờ vượt quá tổng sở hữu (qty)
+    if sellable > qty:
+        if 0 < on_hand < sellable:
+            # Trường hợp sellable bị lấy nhầm từ trường tổng (như tradableQuantity), còn on_hand là lượng khả dụng
+            qty = sellable
+            sellable = on_hand
+        else:
+            qty = max(qty, sellable)
     price = _unit_vnd(_first(p, "marketPrice", "lastPrice", "currentPrice", "closePrice",
                              "matchPrice", "price", default=0))
     avg = _unit_vnd(_first(p, "avgPrice", "averagePrice", "costPrice", "avgCost", "tradePrice", "buyPrice", "cost", default=0))
