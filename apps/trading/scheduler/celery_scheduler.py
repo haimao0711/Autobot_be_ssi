@@ -257,22 +257,22 @@ def get_user_schedule_status(user):
 
 def cancel_all_orders_on_startup():
     """
-    Hủy tất cả lệnh của tất cả users có scheduler_status=True khi container khởi động
+    Hủy tất cả lệnh của tất cả users khi container khởi động (reset bot)
     """
     try:
         from apps.account.detail.services import AccountService
         from apps.trading.service.handlers import cancel_all_orders
         from apps import api
         
-        users_with_scheduler = User.objects.filter(scheduler_status=True)
+        users = User.objects.all()
         
-        if not users_with_scheduler.exists():
-            logger.info("🔄 Không có user nào có Scheduler đang chạy, không cần hủy lệnh.")
+        if not users.exists():
+            logger.info("🔄 Không có user nào trong hệ thống, không cần hủy lệnh.")
             return
             
-        logger.info(f"🔄 Bắt đầu hủy tất cả lệnh cho {users_with_scheduler.count()} user(s) khi khởi động container...")
+        logger.info(f"🔄 Bắt đầu hủy tất cả lệnh cho {users.count()} user(s) khi khởi động container...")
         
-        for user in users_with_scheduler:
+        for user in users:
             try:
                 vps_account = AccountService.get_account_by_user(user)
                 if not vps_account:
@@ -284,15 +284,14 @@ def cancel_all_orders_on_startup():
                 session_id = vps_account.vps_session_id
                 url = api.TRADING_URL
                 
-                logger.info(f"🔄 Đang hủy tất cả lệnh cho user {user.username}...")
+                logger.info(f"🔄 Đang hủy tất cả lệnh cho user {user.username} (tài khoản {account_num})...")
                 cancel_all_orders(user, account_name, account_num, '', url, session_id, '', 'All')
                 logger.info(f"✅ Đã hủy tất cả lệnh cho user {user.username}")
                 
             except Exception as e:
-                logger.exception(f"❌ Lỗi khi hủy lệnh cho user {user.username}: {e}")
+                logger.warning(f"⚠️ Không thể hủy lệnh khi startup cho user {user.username}: {e}")
                 
         logger.info("✅ Hoàn thành việc hủy tất cả lệnh khi khởi động container.")
-        
         
     except Exception as e:
         logger.exception(f"❌ Lỗi trong cancel_all_orders_on_startup: {e}")

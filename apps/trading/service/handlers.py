@@ -48,42 +48,54 @@ logger = logging.getLogger(__name__)
 
 
 def cancel_all_orders(user: User, user_name: str, account: str, symbol: str, request_url: str, session: str, asp_net_session: str, side: str):
-    logger.info(f'Bắt đầu chạy hàm cancel all order ')
-    ref_id = f"{user_name}.I.test.{int(time.time()*1000)}"
+    logger.info(f'Bắt đầu chạy hàm cancel all order cho user {user_name}, account {account}, symbol {symbol}')
     
     # Sử dụng helper function với retry
     res_not_matcheds = get_orders_not_matched_with_retry(user_name, account, symbol, request_url, session, side)
        
-    if res_not_matcheds:
+    if res_not_matcheds is None:
+        logger.error(f'❌ Lỗi API: Không thể lấy danh sách lệnh để hủy cho user {user_name}, account {account}')
+        return False
+
+    if len(res_not_matcheds) > 0:
         logger.info(f'Da co danh sach chua khop to cancel all order: {res_not_matcheds}')
 
+        cancel_count = 0
         for order in res_not_matcheds: 
-            # Sử dụng helper execute_action_with_retry
+            order_no = order.get('orderNo') or order.get('orderId')
+            ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
+            # Sử dụng helper execute_action_with_retry, truyền trade_account=account
             res_cancel = execute_action_with_retry(
                 handle_cancel_order_service,
-                user_name, request_url, session, '', order['orderNo'], ref_id,
-                action_name=f"Cancel All Orders - {order['symbol']}"
+                user_name, request_url, session, '', order_no, ref_id_order, account,
+                action_name=f"Cancel All Orders - {order.get('symbol')}"
             )
             
             if res_cancel:
-                logger.info(f"Da huy lenh {order['side']} mã {order['symbol']}: {res_cancel}")
+                cancel_count += 1
+                logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
-                logger.info(f'Chua huy duoc lenh sell {symbol}')
-        message_cancel = '📢📢📢** Khởi động lại Bot, đã hủy tất cả các lệnh đang đặt hiện tại** 📢📢📢'
+                logger.warning(f"Chua huy duoc lenh {order.get('side')} mã {order.get('symbol')}")
+
         if symbol == 'calendar_cancel':
-            message_cancel = '📢📢📢** Hủy tất cả các lệnh đang đặt hiện tại theo lịch** 📢📢📢'
+            message_cancel = f'📢📢📢 **Hủy tất cả các lệnh đang đặt hiện tại theo lịch** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         elif symbol == 'cancel_all_buy_orders':
-            message_cancel = '** Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại**'
+            message_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+        elif symbol == 'cancel_all_sell_orders':
+            message_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+        elif symbol == 'otp_cancel':
+            message_cancel = f'🔑 **Nhập lại OTP thành công, đã hủy các lệnh còn sót lại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         else:
-            message_cancel = '** Đã hủy tất cả các lệnh đang đặt hiện tại**'        
+            message_cancel = f'📢📢📢 **Khởi động lại Bot, đã hủy tất cả các lệnh đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'        
         send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
-        send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)        
- 
+        send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
+        return True
     else:
-        logger.info(f'Chua lay duoc danh sach chua khop to cancel all orders')
+        logger.info(f'✅ Không có lệnh nào chưa khớp trên sàn SSI để hủy cho user {user_name}, account {account}')
+        return True
+
 def cancel_all_buy_orders(user: User, user_name: str, account: str, symbol: str, request_url: str, session: str, asp_net_session: str, side: str):
     logger.info(f'Bắt đầu chạy hàm cancel all buy orders ')
-    ref_id = f"{user_name}.I.test.{int(time.time()*1000)}"
     
     # Sử dụng helper function với retry
     res_not_matcheds = get_orders_not_matched_with_retry(user_name, account, symbol, request_url, session, side)
@@ -91,26 +103,30 @@ def cancel_all_buy_orders(user: User, user_name: str, account: str, symbol: str,
     if res_not_matcheds:
         logger.info(f'Da co danh sach chua khop to cancel all buy orders: {res_not_matcheds}')
 
+        cancel_count = 0
         for order in res_not_matcheds: 
-            # Sử dụng helper execute_action_with_retry
+            order_no = order.get('orderNo') or order.get('orderId')
+            ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
+            # Sử dụng helper execute_action_with_retry, truyền trade_account=account
             res_cancel = execute_action_with_retry(
                 handle_cancel_order_service,
-                user_name, request_url, session, '', order['orderNo'], ref_id,
-                action_name=f"Cancel All Buy Orders - {order['symbol']}"
+                user_name, request_url, session, '', order_no, ref_id_order, account,
+                action_name=f"Cancel All Buy Orders - {order.get('symbol')}"
             )
             
             if res_cancel:
-                logger.info(f"Da huy lenh {order['side']} mã {order['symbol']}: {res_cancel}")
+                cancel_count += 1
+                logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
-                logger.info(f"Chua huy duoc lenh {order['side']}  {symbol}")
-        message_cancel = '** Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại**'
+                logger.warning(f"Chua huy duoc lenh {order.get('side')}  {symbol}")
+        message_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
         send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
     else:
-        logger.info(f'Chua lay duoc danh sach chua khop to cancel all buy orders')
+        logger.info(f'✅ Không có lệnh mua nào chưa khớp để hủy cho {account}')
+
 def cancel_all_sell_orders(user: User, user_name: str, account: str, symbol: str, request_url: str, session: str, asp_net_session: str, side: str):
     logger.info(f'Bắt đầu chạy hàm cancel all sell orders ')
-    ref_id = f"{user_name}.I.test.{int(time.time()*1000)}"
     
     # Sử dụng helper function với retry
     res_not_matcheds = get_orders_not_matched_with_retry(user_name, account, symbol, request_url, session, side)
@@ -118,23 +134,27 @@ def cancel_all_sell_orders(user: User, user_name: str, account: str, symbol: str
     if res_not_matcheds:
         logger.info(f'Da co danh sach chua khop to cancel all sell orders: {res_not_matcheds}')
 
+        cancel_count = 0
         for order in res_not_matcheds: 
-            # Sử dụng helper execute_action_with_retry
+            order_no = order.get('orderNo') or order.get('orderId')
+            ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
+            # Sử dụng helper execute_action_with_retry, truyền trade_account=account
             res_cancel = execute_action_with_retry(
                 handle_cancel_order_service,
-                user_name, request_url, session, '', order['orderNo'], ref_id,
-                action_name=f"Cancel All Sell Orders - {order['symbol']}"
+                user_name, request_url, session, '', order_no, ref_id_order, account,
+                action_name=f"Cancel All Sell Orders - {order.get('symbol')}"
             )
             
             if res_cancel:
-                logger.info(f"Da huy lenh {order['side']} mã {order['symbol']}: {res_cancel}")
+                cancel_count += 1
+                logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
-                logger.info(f"Chua huy duoc lenh {order['side']}  {symbol}")
-        message_cancel = '** Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại**'
+                logger.warning(f"Chua huy duoc lenh {order.get('side')}  {symbol}")
+        message_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
         send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
     else:
-        logger.info(f'Chua lay duoc danh sach chua khop to cancel all sell orders')
+        logger.info(f'✅ Không có lệnh bán nào chưa khớp để hủy cho {account}')
 
 def get_orders_not_matched_with_retry(user_name, account, symbol, request_url, session, side, max_retry=3, retry_delay=1):
     """
@@ -318,10 +338,12 @@ def cancel_buy_order(user: User,user_name: str, account: str, symbol: str, reque
 
         all_success = True
         for order in res_not_matcheds:  
-            # Sử dụng helper execute_action_with_retry
+            order_no = order.get('orderNo') or order.get('orderId')
+            ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
+            # Sử dụng helper execute_action_with_retry, truyền trade_account=account
             res_cancel = execute_action_with_retry(
                 handle_cancel_order_service,
-                user_name, request_url, session, '', order['orderNo'], ref_id,
+                user_name, request_url, session, '', order_no, ref_id_order, account,
                 action_name="Cancel Buy Order"
             )
             
@@ -484,11 +506,13 @@ def cancel_sell_order(user: User, user_name: str, account: str, symbol: str, req
         
         all_success = True
         for order in res_not_matcheds: 
+            order_no = order.get('orderNo') or order.get('orderId')
+            ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
             try:
-                # Sử dụng helper execute_action_with_retry
+                # Sử dụng helper execute_action_with_retry, truyền trade_account=account
                 res_cancel = execute_action_with_retry(
                     handle_cancel_order_service,
-                    user_name, request_url, session, '', order.get('orderNo'), ref_id,
+                    user_name, request_url, session, '', order_no, ref_id_order, account,
                     action_name="Cancel Sell Order"
                 )
                 

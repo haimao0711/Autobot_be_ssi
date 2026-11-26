@@ -105,6 +105,13 @@ class AuthencationStockExchagesView(APIView):
             if session_id != session_id_old:
                 ConfigurationOverviewServices.restart_request_trade_overview(user)  # Reset is_trading và mua/bán tay
 
+            # HỦY TẤT CẢ LỆNH CÒN TREO KHI NHẬP LẠI OTP
+            try:
+                cancel_all_orders(user, account_name, account_num, 'otp_cancel', url, session_id, '', 'All')
+                logger.info("Đã dọn dẹp/hủy toàn bộ lệnh treo khi nhập lại OTP cho tài khoản %s", account_num)
+            except Exception as e:
+                logger.warning("Không thể hủy lệnh treo khi nhập OTP cho %s: %s", account_num, e)
+
             result = update_vps_data(session_id, "Session hợp lệ!", 1)
             create_user_schedules(user)
             user.scheduler_status = True

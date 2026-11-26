@@ -391,7 +391,7 @@ def handle_orders_not_matched(user_account, trade_account, symbol, url, valid_se
         return None
 
     not_matched = []
-    is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all", "calendar_cancel", "cancel_all_buy_orders", "cancel_all_sell_orders")
+    is_all_symbols = not symbol or str(symbol).lower() in ("all_order", "all", "calendar_cancel", "cancel_all_buy_orders", "cancel_all_sell_orders", "otp_cancel", "reset_bot")
 
     # Chuẩn hóa chiều lệnh: "BUY"/"B" -> "B", "SELL"/"S" -> "S", "ALL" -> "ALL"
     side_req = str(side).upper() if side else "ALL"
