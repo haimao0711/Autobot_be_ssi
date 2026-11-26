@@ -61,6 +61,7 @@ def cancel_all_orders(user: User, user_name: str, account: str, symbol: str, req
         logger.info(f'Da co danh sach chua khop to cancel all order: {res_not_matcheds}')
 
         cancel_count = 0
+        order_details_lines = []
         for order in res_not_matcheds: 
             order_no = order.get('orderNo') or order.get('orderId')
             ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
@@ -71,24 +72,46 @@ def cancel_all_orders(user: User, user_name: str, account: str, symbol: str, req
                 action_name=f"Cancel All Orders - {order.get('symbol')}"
             )
             
+            o_side = str(order.get('side', '')).upper()
+            side_text = "MUA" if o_side in ('B', 'BUY') else ("BÁN" if o_side in ('S', 'SELL') else o_side)
+            o_sym = order.get('symbol', '')
+            o_price = order.get('showPrice', 0)
+            o_vol = order.get('volume', 0)
+
             if res_cancel:
                 cancel_count += 1
+                order_details_lines.append(f"• {side_text} **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP")
                 logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
+                order_details_lines.append(f"• ⚠️ {side_text} **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP (Thất bại)")
                 logger.warning(f"Chua huy duoc lenh {order.get('side')} mã {order.get('symbol')}")
 
         if symbol == 'calendar_cancel':
-            message_cancel = f'📢📢📢 **Hủy tất cả các lệnh đang đặt hiện tại theo lịch** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+            title_cancel = f'📢📢📢 **Hủy tất cả các lệnh đang đặt hiện tại theo lịch** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         elif symbol == 'cancel_all_buy_orders':
-            message_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+            title_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         elif symbol == 'cancel_all_sell_orders':
-            message_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+            title_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         elif symbol == 'otp_cancel':
-            message_cancel = f'🔑 **Nhập lại OTP thành công, đã hủy các lệnh còn sót lại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+            title_cancel = f'🔑 **Nhập lại OTP thành công, đã hủy các lệnh còn sót lại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
         else:
-            message_cancel = f'📢📢📢 **Khởi động lại Bot, đã hủy tất cả các lệnh đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'        
-        send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
-        send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
+            title_cancel = f'📢📢📢 **Khởi động lại Bot, đã hủy tất cả các lệnh đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+
+        if order_details_lines:
+            message_cancel = f"{title_cancel}:\n" + "\n".join(order_details_lines)
+        else:
+            message_cancel = title_cancel
+
+        if len(message_cancel) > 3800:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, title_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, title_cancel)
+            for i in range(0, len(order_details_lines), 20):
+                chunk = "\n".join(order_details_lines[i:i+20])
+                send_message_telegram(user, MessageTypeEnum.OVERALL, chunk)
+                send_message_telegram(user, MessageTypeEnum.ACT, chunk)
+        else:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
         return True
     else:
         logger.info(f'✅ Không có lệnh nào chưa khớp trên sàn SSI để hủy cho user {user_name}, account {account}')
@@ -104,6 +127,7 @@ def cancel_all_buy_orders(user: User, user_name: str, account: str, symbol: str,
         logger.info(f'Da co danh sach chua khop to cancel all buy orders: {res_not_matcheds}')
 
         cancel_count = 0
+        order_details_lines = []
         for order in res_not_matcheds: 
             order_no = order.get('orderNo') or order.get('orderId')
             ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
@@ -114,14 +138,34 @@ def cancel_all_buy_orders(user: User, user_name: str, account: str, symbol: str,
                 action_name=f"Cancel All Buy Orders - {order.get('symbol')}"
             )
             
+            o_sym = order.get('symbol', symbol)
+            o_price = order.get('showPrice', 0)
+            o_vol = order.get('volume', 0)
+
             if res_cancel:
                 cancel_count += 1
+                order_details_lines.append(f"• MUA **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP")
                 logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
+                order_details_lines.append(f"• ⚠️ MUA **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP (Thất bại)")
                 logger.warning(f"Chua huy duoc lenh {order.get('side')}  {symbol}")
-        message_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
-        send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
-        send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
+
+        title_cancel = f'⛔ **Chặn mua, đã hủy tất cả các lệnh mua đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+        if order_details_lines:
+            message_cancel = f"{title_cancel}:\n" + "\n".join(order_details_lines)
+        else:
+            message_cancel = title_cancel
+
+        if len(message_cancel) > 3800:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, title_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, title_cancel)
+            for i in range(0, len(order_details_lines), 20):
+                chunk = "\n".join(order_details_lines[i:i+20])
+                send_message_telegram(user, MessageTypeEnum.OVERALL, chunk)
+                send_message_telegram(user, MessageTypeEnum.ACT, chunk)
+        else:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
     else:
         logger.info(f'✅ Không có lệnh mua nào chưa khớp để hủy cho {account}')
 
@@ -135,6 +179,7 @@ def cancel_all_sell_orders(user: User, user_name: str, account: str, symbol: str
         logger.info(f'Da co danh sach chua khop to cancel all sell orders: {res_not_matcheds}')
 
         cancel_count = 0
+        order_details_lines = []
         for order in res_not_matcheds: 
             order_no = order.get('orderNo') or order.get('orderId')
             ref_id_order = f"{user_name}.I.cancel.{order_no}.{int(time.time()*1000)}"
@@ -145,14 +190,34 @@ def cancel_all_sell_orders(user: User, user_name: str, account: str, symbol: str
                 action_name=f"Cancel All Sell Orders - {order.get('symbol')}"
             )
             
+            o_sym = order.get('symbol', symbol)
+            o_price = order.get('showPrice', 0)
+            o_vol = order.get('volume', 0)
+
             if res_cancel:
                 cancel_count += 1
+                order_details_lines.append(f"• BÁN **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP")
                 logger.info(f"Da huy lenh {order.get('side')} mã {order.get('symbol')}: {res_cancel}")
             else:
+                order_details_lines.append(f"• ⚠️ BÁN **{o_sym}** - Giá: **{o_price}** - KL: **{int(o_vol):,}** CP (Thất bại)")
                 logger.warning(f"Chua huy duoc lenh {order.get('side')}  {symbol}")
-        message_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
-        send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
-        send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
+
+        title_cancel = f'⛔ **Chặn bán, đã hủy tất cả các lệnh bán đang đặt hiện tại** (Đã hủy {cancel_count}/{len(res_not_matcheds)} lệnh)'
+        if order_details_lines:
+            message_cancel = f"{title_cancel}:\n" + "\n".join(order_details_lines)
+        else:
+            message_cancel = title_cancel
+
+        if len(message_cancel) > 3800:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, title_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, title_cancel)
+            for i in range(0, len(order_details_lines), 20):
+                chunk = "\n".join(order_details_lines[i:i+20])
+                send_message_telegram(user, MessageTypeEnum.OVERALL, chunk)
+                send_message_telegram(user, MessageTypeEnum.ACT, chunk)
+        else:
+            send_message_telegram(user, MessageTypeEnum.OVERALL, message_cancel)
+            send_message_telegram(user, MessageTypeEnum.ACT, message_cancel)
     else:
         logger.info(f'✅ Không có lệnh bán nào chưa khớp để hủy cho {account}')
 
