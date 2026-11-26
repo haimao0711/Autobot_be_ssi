@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 import requests
 from django.core.cache import cache as _django_cache
@@ -35,11 +36,14 @@ class SSIAuthError(Exception):
 class _TokenStore:
     """Lưu token dùng chung giữa các container (api, celery-worker...) qua Redis."""
     _mem = {}
+    _redis_client = None
 
     def _redis(self):
-        import redis
-        url = os.getenv("REDIS_URL") or "redis://redis:6379/0"
-        return redis.Redis.from_url(url, socket_timeout=3, decode_responses=True)
+        if self._redis_client is None:
+            import redis
+            url = os.getenv("REDIS_URL") or "redis://redis:6379/0"
+            self._redis_client = redis.Redis.from_url(url, socket_timeout=5, decode_responses=True)
+        return self._redis_client
 
     def set(self, key, value, timeout):
         try:
@@ -160,11 +164,12 @@ def get_access_token(account, otp: str = None, transaction_id: str = None) -> st
     ttl = TOKEN_CACHE_TTL
     if expires_at:
         try:
-            diff = int(expires_at / 1000 - time.time())
+            exp_ts = float(expires_at) / 1000.0 if float(expires_at) > 1e11 else float(expires_at)
+            diff = int(exp_ts - time.time())
             if diff > 60:
                 ttl = diff
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Lỗi tính TTL từ expiresAt (%s): %s", expires_at, e)
 
     # Lưu vào Redis
     cid = account.ssi_consumer_id
@@ -179,34 +184,49 @@ def get_access_token(account, otp: str = None, transaction_id: str = None) -> st
 
 
 def refresh_access_token(account) -> str:
-    """Làm mới AccessToken bằng RefreshToken (/api/v3/auth/refresh)."""
+    """Làm mới AccessToken bằng RefreshToken (/api/v3/auth/refresh) với lock tránh race condition."""
     cid = account.ssi_consumer_id
-    refresh_token = cache.get(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
-    if not refresh_token:
-        clear_writer_token(account)
-        raise SSIAuthError("Không có RefreshToken để làm mới phiên SSI")
+    with _lock:
+        # Double check: nếu một luồng khác vừa refresh thành công trong lúc chờ lock
+        cached_token = cache.get(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid))
+        refresh_token = cache.get(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
+        if not refresh_token:
+            if cached_token:
+                return cached_token
+            raise SSIAuthError("Không có RefreshToken để làm mới phiên SSI")
 
-    url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_REFRESH}"
-    body = {"refreshToken": refresh_token}
-    headers = {"Content-Type": "application/json"}
-    res = requests.post(url, json=body, headers=headers, timeout=10)
-    data = res.json()
-    if res.status_code != 200:
-        logger.warning("Refresh token SSI thất bại: %s", data)
-        clear_writer_token(account)
-        raise SSIAuthError("Phiên SSI đã hết hạn, cần xác thực OTP mới")
+        url = f"{SSI_BASE_URL}{ENDPOINT_AUTH_REFRESH}"
+        body = {"refreshToken": refresh_token}
+        headers = {"Content-Type": "application/json"}
+        res = requests.post(url, json=body, headers=headers, timeout=10)
+        data = res.json()
+        if res.status_code != 200:
+            logger.warning("Refresh token SSI thất bại: %s", data)
+            cache.delete(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid))
+            raise SSIAuthError("Phiên SSI đã hết hạn, cần xác thực OTP mới")
 
-    payload = data.get("data") if isinstance(data.get("data"), dict) else data
-    access_token = payload.get("accessToken")
-    new_refresh = payload.get("refreshToken")
+        payload = data.get("data") if isinstance(data.get("data"), dict) else data
+        access_token = payload.get("accessToken")
+        new_refresh = payload.get("refreshToken")
+        expires_at = payload.get("expiresAt")
 
-    if access_token:
-        cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
-        cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=TOKEN_CACHE_TTL)
-    if new_refresh:
-        cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), new_refresh, timeout=TOKEN_CACHE_TTL * 7)
+        ttl = TOKEN_CACHE_TTL
+        if expires_at:
+            try:
+                exp_ts = float(expires_at) / 1000.0 if float(expires_at) > 1e11 else float(expires_at)
+                diff = int(exp_ts - time.time())
+                if diff > 60:
+                    ttl = diff
+            except Exception:
+                pass
 
-    return access_token
+        if access_token:
+            cache.set(ACCESS_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=ttl)
+            cache.set(WRITER_TOKEN_CACHE_KEY.format(consumer_id=cid), access_token, timeout=ttl)
+        if new_refresh:
+            cache.set(REFRESH_TOKEN_CACHE_KEY.format(consumer_id=cid), new_refresh, timeout=ttl * 7)
+
+        return access_token
 
 
 def verify_code(account, code=None) -> str:
@@ -318,9 +338,9 @@ def send_request(account, method: str, path: str, params: dict = None,
             # Kiểm tra nếu HTTP status không thành công
             if res.status_code != 200:
                 logger.error("SSI API %s %s trả về mã HTTP %s: %s", method, path, res.status_code, data)
-                if res.status_code in (401, 403):
+                if res.status_code == 401:
                     clear_writer_token(account)
-                    raise SSIAuthError(f"Phiên SSI đã hết hạn hoặc không có quyền: {data}")
+                    raise SSIAuthError(f"Phiên SSI đã hết hạn: {data}")
                 if isinstance(data, dict):
                     data.setdefault("status", res.status_code)
                     data.setdefault("error", data.get("msg") or data.get("message") or f"HTTP {res.status_code}")
